@@ -42,7 +42,9 @@ export function detect(text: string, patterns: Pattern[], book: CodeBook = new C
         re.lastIndex++;
         continue;
       }
-      if (p.validate && !p.validate(m[0], text.slice(Math.max(0, m.index - 3), m.index))) continue;
+      // Context-aware finance/clinical rules need enough text to verify labels without
+      // consuming those labels in the replacement range.
+      if (p.validate && !p.validate(m[0], text.slice(Math.max(0, m.index - 80), m.index))) continue;
       cands.push({ category: p.category, start: m.index, end: m.index + m[0].length });
     }
   }

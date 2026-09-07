@@ -12,15 +12,15 @@ const BASE = `${import.meta.env.BASE_URL}samples/`;
 
 /** One sample per format, shown as a single compact row on the upload screen. */
 export const SAMPLES: Sample[] = [
-  { file: 'contract.docx', name: '委外服務契約書.docx', format: 'Word', description: '4 頁契約，含表格與頁首頁尾' },
-  { file: 'quotation.pdf', name: '報價單.pdf', format: 'PDF', description: '3 頁報價單，跨頁明細表' },
-  { file: 'customers.xlsx', name: '客戶資料.xlsx', format: 'Excel', description: '60 筆客戶，三個工作表' },
-  { file: 'meeting-notes.md', name: '專案會議紀錄.md', format: 'Markdown', description: '出席者、決議、待辦' },
+  { file: 'contract.docx', name: '供應商服務合約.docx', format: 'Word', description: '4 頁合約，含簽署、聯絡與付款欄位' },
+  { file: 'quotation.pdf', name: '藥品供應商報價單.pdf', format: 'PDF', description: '3 頁報價單，含跨頁明細表' },
+  { file: 'customers.xlsx', name: '供應商與付款資料.xlsx', format: 'Excel', description: '60 筆資料，三個工作表' },
+  { file: 'meeting-notes.md', name: '品質與臨床會議紀錄.md', format: 'Markdown', description: '出席者、決議與待辦事項' },
 ];
 
 export const RESTORE_SAMPLE = {
-  doc: { file: 'contract.deid.docx', name: '委外服務契約書.deid.docx', format: 'DOCX', description: '已去識別化的契約書' },
-  csv: { file: 'contract.mapping.csv', name: '委外服務契約書.mapping.csv', format: 'CSV', description: '對應的編碼表' },
+  doc: { file: 'contract.deid.docx', name: '供應商服務合約.deid.docx', format: 'DOCX', description: '已去識別化的供應商合約' },
+  csv: { file: 'contract.mapping.csv', name: '供應商服務合約.mapping.csv', format: 'CSV', description: '對應的編碼表' },
 };
 
 export function sampleUrl(file: string): string {

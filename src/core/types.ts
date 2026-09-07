@@ -1,6 +1,11 @@
 export type DocFormat = 'txt' | 'md' | 'docx' | 'xlsx' | 'pdf';
 
-export const CATEGORIES = ['姓名', '身分證', '手機', '市話', '地址', '電子郵件', '公司', '統編', '識別碼'] as const;
+/** Direct identifiers and common pharmaceutical-document quasi-identifiers. */
+export const CATEGORIES = [
+  '姓名', '身分證', '手機', '市話', '地址', '電子郵件', '公司', '統編',
+  '銀行帳號', '信用卡', '發票／單據號碼', '合約／採購編號', '日期',
+  '受試者編號', '病歷號', '試驗編號', '研究中心', '藥品批號', '產品／化合物代碼', '識別碼',
+] as const;
 export type Category = (typeof CATEGORIES)[number];
 
 export interface Pattern {
@@ -11,6 +16,8 @@ export interface Pattern {
   regex: string;
   example: string;
   enabled: boolean;
+  /** Used in the rules UI to distinguish pharma defaults from general PII rules. */
+  domain?: 'general' | 'pharma';
   /** Builtin-only second-pass filter (e.g. checksum). `before` is the text right before the match. */
   validate?: (match: string, before: string) => boolean;
 }

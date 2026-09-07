@@ -47,6 +47,28 @@ export function maskDisplay(category: Category, original: string): string {
     }
     case '統編':
       return keepEnds(original, 2, 1);
+    case '銀行帳號':
+      return keepEnds(original, 3, 3);
+    case '信用卡': {
+      const digits = original.replace(/\D/g, '');
+      return digits.length >= 4 ? `****-****-****-${digits.slice(-4)}` : keepEnds(original, 2, 2);
+    }
+    case '發票／單據號碼':
+      return keepEnds(original, 2, 2);
+    case '合約／採購編號':
+      return keepEnds(original, 3, 3);
+    case '日期':
+      return /^(?:19|20)\d{2}[-/.]/u.test(original)
+        ? `${original.slice(0, 4)}-**-**`
+        : original.replace(/\d(?=[年月日])/gu, '*');
+    case '受試者編號':
+    case '病歷號':
+    case '試驗編號':
+    case '藥品批號':
+    case '產品／化合物代碼':
+      return keepEnds(original, 3, 2);
+    case '研究中心':
+      return keepEnds(original, 2, 2);
     case '識別碼':
     default:
       return keepEnds(original, 3, 0);

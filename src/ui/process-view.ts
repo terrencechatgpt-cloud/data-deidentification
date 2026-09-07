@@ -162,13 +162,14 @@ function render(root: HTMLElement): void {
   clear(root);
   if (state.docs.length === 0) {
     root.append(
-      el('h2', {}, '上傳文件'),
-      el('p', { class: 'muted' }, `支援 PDF（含文字層）、Word (.docx)、Excel (.xlsx)、TXT、Markdown；可一次選擇多個檔案（最多 ${MAX_FILES} 個、格式可混合），單檔 20 MB 以內。所有處理皆在瀏覽器內完成，文件不會離開你的電腦。`),
+      el('h2', {}, '藥廠文件去識別化'),
+      el('p', { class: 'muted' }, `適用於公文、合約、財務數據、供應商資料與臨床研究文件。支援 PDF（含文字層）、Word (.docx)、Excel (.xlsx)、TXT、Markdown；可一次選擇多個檔案（最多 ${MAX_FILES} 個、格式可混合），單檔 20 MB 以內。所有處理皆在瀏覽器內完成，文件不會離開你的電腦。`),
+      renderSafetyCard(),
       dropZone({
         accept: ACCEPT_ATTR,
         multiple: true,
         label: '拖曳一或多個檔案到這裡，或點擊選擇檔案',
-        hint: `.pdf .docx .xlsx .txt .md ・ 最多 ${MAX_FILES} 個`,
+        hint: `.pdf .docx .xlsx .txt .md ・ 公文／合約／財務與研究資料 ・ 最多 ${MAX_FILES} 個`,
         onFiles: (files) => void loadFiles(files, root),
       }),
       renderPasteBox(root),
@@ -177,6 +178,22 @@ function render(root: HTMLElement): void {
     return;
   }
   root.append(renderToolbar(root), renderWorkspace(root));
+}
+
+function renderSafetyCard(): HTMLElement {
+  return el(
+    'aside',
+    { class: 'safety-card', role: 'note' },
+    el('h3', {}, '使用前請確認'),
+    el('p', {}, '這是文件處理與覆核輔助工具，不代表法規、GxP 或公司 SOP 的最終判定。'),
+    el('ul', {},
+      el('li', {}, '自動偵測完成後，請逐頁／逐工作表覆核；漏抓內容可在預覽中圈選新增。'),
+      el('li', {}, 'Excel 的數值型儲存格、公式結果、註解、隱藏工作表與部分中繼資料不在目前偵測範圍。'),
+      el('li', {}, '掃描型 PDF 沒有文字層時無法處理；請先 OCR，並確認 OCR 結果沒有錯字或漏字。'),
+      el('li', {}, '日期、試驗編號、批號與產品代碼可能影響業務判讀；下載前請依用途決定是否保留或替換。'),
+      el('li', {}, 'CSV 編碼表可以還原原文，請視同原始機密文件保存與傳遞。'),
+    ),
+  );
 }
 
 function renderPasteBox(root: HTMLElement): HTMLElement {
@@ -228,7 +245,7 @@ function renderToolbar(root: HTMLElement): HTMLElement {
       ),
     ),
     el('div', { class: 'toolbar-row muted small' },
-      el('span', {}, '編碼表是還原的唯一憑證，請妥善保管。'),
+      el('span', {}, '下載前請完成人工覆核；編碼表是還原的唯一憑證，請依公司權限管理。'),
       limits ? el('span', { class: 'notice notice-inline' }, limits) : null,
     ),
   );
@@ -279,7 +296,7 @@ function renderWorkspace(root: HTMLElement): HTMLElement {
   const listToggleHost = el('div', { class: 'list-toggle-host' });
   const previewWrap = el('div', { class: 'preview-wrap' },
     el('div', { class: 'preview-head' }, el('h3', {}, '去識別化預覽'), listToggleHost),
-    el('p', { class: 'muted small' }, `${previewHint(d.doc)}預覽以遮罩樣式呈現（如 王OO、0912-***-678）；滑鼠移到標記可看原文與輸出標記，點擊標記可取消；圈選文字可手動新增項目。`),
+    el('p', { class: 'muted small' }, `${previewHint(d.doc)}預覽以遮罩樣式呈現；滑鼠移到標記可看原文與輸出標記，點擊標記可取消；圈選文字可手動新增項目。日期、批號與產品代碼請特別確認。`),
     legendHost,
     preview,
   );

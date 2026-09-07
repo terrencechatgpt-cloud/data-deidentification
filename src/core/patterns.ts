@@ -68,6 +68,29 @@ const NAME_STOPLIST = new Set([
 /** "X方" in contracts/legal text (甲方、乙方、雙方、他方…) is a party, not a person surnamed 方. */
 const PARTY_PREFIX = /[甲乙丙丁雙各買賣我他貴對本該多官軍校院廠資勞前後男女一二三四五六七八九十任另每]$/u;
 
+// These rules intentionally use a broad value match plus a nearby label validator. This keeps
+// labels such as "病歷號：" readable in the output while avoiding a blanket match on numbers.
+const hasContext = (before: string, pattern: RegExp): boolean => pattern.test(before.slice(-80));
+const MRN_CONTEXT = /(?:病歷(?:號|編號)|就診號|MRN|medical\s+record)\s*[:：#-]?\s*$/iu;
+const BANK_CONTEXT = /(?:銀行|匯款|收款|付款|帳號|賬號|account|acct)[^\n]{0,30}$/iu;
+const CARD_CONTEXT = /(?:信用卡|卡號|credit\s*card)[^\n]{0,20}$/iu;
+
+const PHARMA_ID_REGEX =
+  '(?<![A-Za-z0-9\\u4e00-\\u9fa5])(?:SUBJ|SUBJECT|PT|PATIENT|CASE)[-_ ]?[A-Z0-9-]{2,20}(?![A-Za-z0-9])';
+const TRIAL_ID_REGEX =
+  '(?<![A-Za-z0-9])(?:NCT\\d{8}|(?:PROT|PROTOCOL|STUDY|TRIAL)[-_][A-Z0-9-]{2,20})(?![A-Za-z0-9])';
+const SITE_REGEX =
+  `(?<![${CJK}A-Za-z0-9])[${CJK}A-Za-z0-9]{2,20}(?:醫學中心|醫院|研究中心|臨床試驗中心|診所)(?![${CJK}A-Za-z0-9])`;
+const LOT_REGEX =
+  '(?<![A-Za-z0-9])(?:LOT|Lot|lot|BATCH|Batch|batch|批號|批次)[-_:#： ]?[A-Z0-9][A-Z0-9-]{2,20}(?![A-Za-z0-9])';
+const PRODUCT_CODE_REGEX =
+  '(?<![A-Za-z0-9])(?:CMPD|COMPOUND|DRUG|API|ABX|RX|CP|DRG)[-_][A-Z0-9-]{2,20}(?![A-Za-z0-9])';
+const CONTRACT_CODE_REGEX =
+  '(?<![A-Za-z0-9])(?:CON|CONTRACT|PO|PR|DOC|MEMO|SC)[-_][A-Z0-9-]{3,24}(?![A-Za-z0-9])';
+const INVOICE_REGEX = '(?<![A-Za-z0-9])[A-Z]{2}\\d{8}(?![A-Za-z0-9])';
+const DATE_REGEX =
+  '(?<![\\d])(?:(?:19|20)\\d{2}[-/.]\\d{1,2}[-/.]\\d{1,2}|民國\\d{2,3}年\\d{1,2}月\\d{1,2}日)(?![\\d])';
+
 function isPlausibleName(m: string, before = ''): boolean {
   if (NAME_STOPLIST.has(m.slice(0, 2))) return false;
   if (/(.)\1/.test(m) && m.length === 2) return false;
@@ -156,5 +179,128 @@ export const BUILTIN_PATTERNS: Pattern[] = [
     regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}',
     example: 'someone@example.com',
     enabled: true,
+  },
+  {
+    id: 'pharma-internal-id',
+    name: '內部／供應商編號',
+    category: '識別碼',
+    source: 'builtin',
+    regex: '(?<![A-Za-z0-9])(?:STAFF|CUST|VENDOR|SUPPLIER|FIN|DEPT|DOC)[-_][A-Z0-9-]{2,20}(?![A-Za-z0-9])',
+    example: 'STAFF-004521、VENDOR-TAIWAN-018',
+    enabled: true,
+    domain: 'pharma',
+  },
+  {
+    id: 'finance-bank-account',
+    name: '銀行／匯款帳號',
+    category: '銀行帳號',
+    source: 'builtin',
+    regex: '(?<![\\d-])\\d{10,16}(?![\\d-])',
+    example: '銀行帳號：013123456789',
+    enabled: true,
+    domain: 'pharma',
+    validate: (_match, before) => hasContext(before, BANK_CONTEXT),
+  },
+  {
+    id: 'finance-credit-card',
+    name: '信用卡號',
+    category: '信用卡',
+    source: 'builtin',
+    regex: '(?<![\\d])(?:\\d{4}[- ]?){3}\\d{4}(?![\\d])',
+    example: '信用卡號：4111-1111-1111-1111',
+    enabled: true,
+    domain: 'pharma',
+    validate: (_match, before) => hasContext(before, CARD_CONTEXT),
+  },
+  {
+    id: 'finance-invoice',
+    name: '發票／單據號碼',
+    category: '發票／單據號碼',
+    source: 'builtin',
+    regex: INVOICE_REGEX,
+    example: 'AB12345678',
+    enabled: true,
+    domain: 'pharma',
+  },
+  {
+    id: 'finance-contract-code',
+    name: '合約／採購編號',
+    category: '合約／採購編號',
+    source: 'builtin',
+    regex: CONTRACT_CODE_REGEX,
+    example: 'PO-2026-0018、SC-2026-0917',
+    enabled: true,
+    domain: 'pharma',
+  },
+  {
+    id: 'pharma-date',
+    name: '日期／出生日期',
+    category: '日期',
+    source: 'builtin',
+    regex: DATE_REGEX,
+    example: '2026-09-08、民國115年9月8日',
+    enabled: true,
+    domain: 'pharma',
+  },
+  {
+    id: 'pharma-subject-id',
+    name: '受試者／個案編號',
+    category: '受試者編號',
+    source: 'builtin',
+    regex: PHARMA_ID_REGEX,
+    example: 'SUBJ-TAIWAN-001、PT-0042',
+    enabled: true,
+    domain: 'pharma',
+  },
+  {
+    id: 'pharma-mrn',
+    name: '病歷／就診號',
+    category: '病歷號',
+    source: 'builtin',
+    regex: '(?<![\\d-])\\d{6,12}(?![\\d-])',
+    example: '病歷號：2026090801',
+    enabled: true,
+    domain: 'pharma',
+    validate: (_match, before) => hasContext(before, MRN_CONTEXT),
+  },
+  {
+    id: 'pharma-trial-id',
+    name: '試驗／研究編號',
+    category: '試驗編號',
+    source: 'builtin',
+    regex: TRIAL_ID_REGEX,
+    example: 'NCT01234567、PROT-ABX-001',
+    enabled: true,
+    domain: 'pharma',
+  },
+  {
+    id: 'pharma-site',
+    name: '醫院／研究中心',
+    category: '研究中心',
+    source: 'builtin',
+    regex: SITE_REGEX,
+    example: '臺北榮民總醫院、北區臨床試驗中心',
+    enabled: true,
+    domain: 'pharma',
+  },
+  {
+    id: 'pharma-lot',
+    name: '藥品批號／批次',
+    category: '藥品批號',
+    source: 'builtin',
+    regex: LOT_REGEX,
+    example: 'LOT-ABX-240901、批號：L20260908',
+    enabled: true,
+    domain: 'pharma',
+  },
+  {
+    id: 'pharma-product-code',
+    name: '產品／化合物代碼',
+    category: '產品／化合物代碼',
+    source: 'builtin',
+    regex: PRODUCT_CODE_REGEX,
+    example: 'ABX-101、CMPD-2409-A',
+    enabled: true,
+    domain: 'pharma',
   },
 ];

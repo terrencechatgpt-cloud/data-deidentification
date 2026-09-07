@@ -17,6 +17,17 @@
   --mark-電子郵件: #e1bee7;
   --mark-公司: #d7ccc8;
   --mark-統編: #b2ebf2;
+  --mark-銀行帳號: #c5cae9;
+  --mark-信用卡: #d1c4e9;
+  --mark-發票／單據號碼: #b3e5fc;
+  --mark-合約／採購編號: #c8e6c9;
+  --mark-日期: #ffccbc;
+  --mark-受試者編號: #f8bbd0;
+  --mark-病歷號: #d7ccc8;
+  --mark-試驗編號: #b2dfdb;
+  --mark-研究中心: #dcedc8;
+  --mark-藥品批號: #ffe0b2;
+  --mark-產品／化合物代碼: #fff59d;
   --mark-識別碼: #ffe082;
   --mark-restored: #d0f0dd;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif;
@@ -106,6 +117,17 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .mark-電子郵件 { background: var(--mark-電子郵件); }
 .mark-公司 { background: var(--mark-公司); }
 .mark-統編 { background: var(--mark-統編); }
+.mark-銀行帳號 { background: var(--mark-銀行帳號); }
+.mark-信用卡 { background: var(--mark-信用卡); }
+.mark-發票／單據號碼 { background: var(--mark-發票／單據號碼); }
+.mark-合約／採購編號 { background: var(--mark-合約／採購編號); }
+.mark-日期 { background: var(--mark-日期); }
+.mark-受試者編號 { background: var(--mark-受試者編號); }
+.mark-病歷號 { background: var(--mark-病歷號); }
+.mark-試驗編號 { background: var(--mark-試驗編號); }
+.mark-研究中心 { background: var(--mark-研究中心); }
+.mark-藥品批號 { background: var(--mark-藥品批號); }
+.mark-產品／化合物代碼 { background: var(--mark-產品／化合物代碼); }
 .mark-識別碼 { background: var(--mark-識別碼); }
 .mark-restored { background: var(--mark-restored); }
 .cancelled { text-decoration: underline dotted var(--danger); text-decoration-thickness: 2px; }
@@ -123,6 +145,17 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .badge-電子郵件 { background: var(--mark-電子郵件); }
 .badge-公司 { background: var(--mark-公司); }
 .badge-統編 { background: var(--mark-統編); }
+.badge-銀行帳號 { background: var(--mark-銀行帳號); }
+.badge-信用卡 { background: var(--mark-信用卡); }
+.badge-發票／單據號碼 { background: var(--mark-發票／單據號碼); }
+.badge-合約／採購編號 { background: var(--mark-合約／採購編號); }
+.badge-日期 { background: var(--mark-日期); }
+.badge-受試者編號 { background: var(--mark-受試者編號); }
+.badge-病歷號 { background: var(--mark-病歷號); }
+.badge-試驗編號 { background: var(--mark-試驗編號); }
+.badge-研究中心 { background: var(--mark-研究中心); }
+.badge-藥品批號 { background: var(--mark-藥品批號); }
+.badge-產品／化合物代碼 { background: var(--mark-產品／化合物代碼); }
 .badge-識別碼 { background: var(--mark-識別碼); }
 .tag {
   display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; line-height: 1.5;
@@ -140,6 +173,11 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .download-actions { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0; }
 .notice { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px; padding: 0.5rem 0.7rem; font-size: 0.85rem; }
 .notice-warn { margin-bottom: 1rem; }
+.safety-card { background: #eef3ff; border: 1px solid #b9cdf8; border-radius: 10px; padding: 0.8rem 1rem; margin: 1rem 0; }
+.safety-card h3 { margin-bottom: 0.35rem; }
+.safety-card p { margin: 0 0 0.35rem; }
+.safety-card ul { margin: 0; padding-left: 1.2rem; }
+.safety-card li + li { margin-top: 0.2rem; }
 .code-list { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
 .code-list code { background: #fff; border: 1px solid var(--warn-border); padding: 0 0.3rem; border-radius: 4px; }
 

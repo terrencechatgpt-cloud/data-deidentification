@@ -23,8 +23,8 @@ export function createRestoreView(): HTMLElement {
 function render(root: HTMLElement): void {
   clear(root);
   root.append(
-    el('h2', {}, '還原文件'),
-    el('p', { class: 'muted' }, '上傳去識別化後的文件與對應的編碼表 (CSV)，系統會將 [類別:編碼] 標記換回原始內容。'),
+    el('h2', {}, '還原藥廠文件'),
+    el('p', { class: 'muted' }, '上傳去識別化後的公文、合約、財務或研究文件與對應的編碼表 (CSV)，系統會將 [類別:編碼] 標記換回原始內容。編碼表是敏感憑證，請依公司權限管理。'),
     el('div', { class: 'restore-inputs' },
       el('div', { class: 'restore-slot' },
         el('h3', {}, '1. 去識別化文件'),

@@ -20,7 +20,7 @@ export function detectFormat(fileName: string): DocFormat | null {
 
 export function validateFile(file: File): DocFormat {
   const format = detectFormat(file.name);
-  if (!format) throw new Error('不支援的檔案格式，請上傳 PDF、Word (.docx)、Excel (.xlsx)、TXT 或 Markdown');
+  if (!format) throw new Error('不支援的檔案格式，請上傳 PDF、Excel (.xlsx)、Word (.docx)、TXT 或 Markdown');
   if (file.size > MAX_FILE_BYTES) {
     throw new Error(`檔案超過 ${MAX_FILE_BYTES / 1024 / 1024} MB 上限`);
   }
@@ -70,10 +70,10 @@ export function mappingFileName(original: string): string {
 
 export function formatLimitations(format: DocFormat): string | null {
   if (format === 'pdf') {
-    return 'PDF 輸出為文字版面重建：文字依原座標繪回，但圖片、圖形與原字型不會保留。此做法確保輸出檔內不殘留任何原始敏感文字。';
+    return 'PDF 輸出為文字版面重建：文字依原座標繪回，但圖片、圖形與原字型不會保留。掃描型 PDF 無法處理；請另行確認影像、附件與中繼資料。';
   }
   if (format === 'xlsx') {
-    return 'Excel 輸出保留儲存格樣式與工作表結構；僅處理文字型儲存格，以數值儲存的電話／證號、公式結果、工作表名稱與註解不在偵測範圍。';
+    return 'Excel 輸出保留儲存格樣式與工作表結構；僅處理文字型儲存格。數值型帳號／電話／證號、公式結果、工作表名稱、註解、隱藏內容與部分中繼資料不在偵測範圍。';
   }
   if (format === 'docx') {
     return 'Word 輸出保留原有樣式與表格；文字方塊、註解等特殊區域可能未涵蓋，請以預覽為準。';

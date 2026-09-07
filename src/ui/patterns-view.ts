@@ -24,7 +24,7 @@ const AI_PROMPT = [
   '應該命中的例子：（例如：EMP-004521、EMP-000317）',
   '不應該命中的例子與原因：（例如：EMP-12345 只有 5 位數字、emp-004521 是小寫開頭）',
   '',
-  `請依序回覆：規則名稱、建議類別（${CATEGORIES.join('／')} 擇一）、規則、一個範例值，並簡短說明規則各部分的意思。`,
+  `請依序回覆：規則名稱、建議類別（${CATEGORIES.join('／')} 擇一）、規則、一個範例值，並簡短說明規則各部分的意思。藥廠文件常見欄位包含受試者編號、病歷號、試驗編號、批號、產品代碼、合約編號與財務帳號。`,
 ].join('\n');
 
 async function copyToClipboard(text: string): Promise<void> {
@@ -51,7 +51,8 @@ function render(root: HTMLElement, editing: CustomPatternConfig | null = null): 
   const patterns = getEffectivePatterns(config);
   root.append(
     el('h2', {}, '偵測規則'),
-    el('p', { class: 'muted' }, '所有規則皆以正規表達式（JavaScript RegExp，flags: gu）比對。內建規則可停用但不可修改；自訂規則可新增、編輯、刪除。設定僅儲存在你的瀏覽器中。'),
+    el('p', { class: 'muted' }, '內建規則涵蓋一般個資，以及公文、合約、財務與臨床研究常見識別資訊。所有規則皆以正規表達式（JavaScript RegExp，flags: gu）比對；內建規則可停用但不可修改，自訂規則可新增、編輯、刪除。設定僅儲存在你的瀏覽器中。'),
+    el('p', { class: 'notice' }, '日期、批號、產品代碼與試驗編號不一定在每個交付情境都應移除；請依文件用途、資料共享對象與公司 SOP 逐筆覆核。'),
     renderTable(root, config, patterns),
     renderForm(root, config, editing),
   );
@@ -89,7 +90,10 @@ function renderTable(root: HTMLElement, config: PatternConfig, patterns: Pattern
       el('td', { class: 'col-nowrap' }, el('span', { class: `badge badge-${p.category}` }, p.category)),
       el('td', {}, el('code', { class: 'regex' }, p.regex.length > 90 ? p.regex.slice(0, 90) + '…' : p.regex)),
       el('td', { class: 'muted' }, p.example),
-      el('td', { class: 'col-nowrap' }, el('span', { class: 'tag' }, p.source === 'builtin' ? '內建' : '自訂')),
+      el('td', { class: 'col-nowrap' },
+        el('span', { class: 'tag' }, p.source === 'builtin' ? '內建' : '自訂'),
+        p.domain === 'pharma' ? el('span', { class: 'tag' }, '藥廠') : null,
+      ),
       actions,
     );
   });
@@ -97,7 +101,7 @@ function renderTable(root: HTMLElement, config: PatternConfig, patterns: Pattern
     'div',
     { class: 'table-wrap' },
     el('table', { class: 'table' },
-      el('thead', {}, el('tr', {}, el('th', { class: 'col-center col-nowrap' }, '啟用'), el('th', {}, '名稱'), el('th', {}, '類別'), el('th', {}, '比對規則'), el('th', {}, '範例'), el('th', {}, '來源'), el('th', {}, ''))),
+      el('thead', {}, el('tr', {}, el('th', { class: 'col-center col-nowrap' }, '啟用'), el('th', {}, '名稱'), el('th', {}, '類別'), el('th', {}, '比對規則'), el('th', {}, '範例'), el('th', {}, '來源／用途'), el('th', {}, ''))),
       el('tbody', {}, ...rows),
     ),
   );
@@ -121,7 +125,7 @@ function renderForm(root: HTMLElement, config: PatternConfig, editing: CustomPat
     const re = compilePattern({ regex: regex.value } as Pattern);
     if (!re) return;
     const found = [...sample.value.matchAll(re)].map((m) => m[0]);
-    hits.append(found.length === 0 ? el('span', { class: 'muted' }, '無命中') : el('span', {}, `命中 ${found.length} 筆：`), ...found.map((f) => el('mark', { class: 'mark mark-識別碼' }, f)));
+    hits.append(found.length === 0 ? el('span', { class: 'muted' }, '無命中') : el('span', {}, `命中 ${found.length} 筆：`), ...found.map((f) => el('mark', { class: `mark mark-${category.value}` }, f)));
   };
   regex.addEventListener('input', preview);
   sample.addEventListener('input', preview);
