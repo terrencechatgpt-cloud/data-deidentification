@@ -1,4 +1,4 @@
-import type { Category, Pattern, RedactionItem } from './types';
+import type { Category, LoadedDocument, Pattern, RedactionItem } from './types';
 import { CodeBook } from './codes';
 
 let nextId = 1;
@@ -61,6 +61,32 @@ export function detect(text: string, patterns: Pattern[], book: CodeBook = new C
       active: true,
     };
   });
+}
+
+/**
+ * Detects a parsed document. Excel numeric cells carry their financial-column context in the
+ * workbook structure rather than in the flattened text, so labelled numeric ranges are added
+ * here while formula cells remain absent from the parser metadata.
+ */
+export function detectDocument(doc: LoadedDocument, patterns: Pattern[], book: CodeBook = new CodeBook()): RedactionItem[] {
+  const items = detect(doc.text, patterns, book);
+  if (doc.format !== 'xlsx') return items;
+
+  const amountPattern = patterns.find((p) => p.category === '財務金額' && p.enabled);
+  const ranges = (doc.handle as { financialRanges?: { start: number; end: number }[] }).financialRanges ?? [];
+  if (!amountPattern || ranges.length === 0) return items;
+
+  const rangePattern: Pattern = { ...amountPattern, validate: undefined };
+  for (const range of ranges) {
+    const localItems = detect(doc.text.slice(range.start, range.end), [rangePattern], book);
+    for (const item of localItems) {
+      const start = item.start + range.start;
+      const end = item.end + range.start;
+      if (items.some((existing) => existing.start === start && existing.end === end)) continue;
+      items.push({ ...item, start, end });
+    }
+  }
+  return items.sort((a, b) => a.start - b.start);
 }
 
 export class OverlapError extends Error {

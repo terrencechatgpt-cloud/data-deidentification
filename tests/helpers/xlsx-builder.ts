@@ -5,7 +5,7 @@ import JSZip from 'jszip';
  * share one entry, like Excel does), `{ inline: '...' }` becomes an inline string,
  * `{ rich: ['a','b'] }` a rich-text shared string, numbers numeric cells.
  */
-export type CellSpec = string | number | { inline: string } | { rich: string[] };
+export type CellSpec = string | number | { inline: string } | { rich: string[] } | { formula: string; value: number };
 
 export interface XlsxSpec {
   sheets: { name: string; rows: CellSpec[][]; colWidths?: number[] }[];
@@ -51,6 +51,7 @@ export async function buildXlsx(spec: XlsxSpec): Promise<Uint8Array> {
           .map((v, c) => {
             const ref = `${colName(c)}${r + 1}`;
             if (typeof v === 'number') return `<c r="${ref}" s="1"><v>${v}</v></c>`;
+            if (typeof v === 'object' && 'formula' in v) return `<c r="${ref}" s="1"><f>${esc(v.formula)}</f><v>${v.value}</v></c>`;
             if (typeof v === 'string') {
               const i = sharedIndex(`s:${v}`, `<si><t xml:space="preserve">${esc(v)}</t></si>`);
               return `<c r="${ref}" t="s" s="1"><v>${i}</v></c>`;

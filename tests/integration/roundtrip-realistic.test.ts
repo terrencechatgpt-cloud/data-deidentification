@@ -4,7 +4,7 @@ import * as pdfjs from 'pdfjs-dist';
 import JSZip from 'jszip';
 import { PDFDocument } from 'pdf-lib';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { detect } from '../../src/core/detector';
+import { detect, detectDocument } from '../../src/core/detector';
 import { BUILTIN_PATTERNS } from '../../src/core/patterns';
 import { applyRedactions } from '../../src/core/redactor';
 import { restore } from '../../src/core/restorer';
@@ -47,6 +47,10 @@ function toXlsxFile(bytes: Uint8Array, name: string): File {
 
 function countActive(items: RedactionItem[], category: string): number {
   return items.filter((i) => i.active && i.category === category).length;
+}
+
+function removeGeneratedMarkers(text: string): string {
+  return text.replace(/\[[^\]\r\n]+:[0-9a-f]{6}\]/gu, '');
 }
 
 /** For every occurrence of `regex` in `text`, checks it lies fully inside some active item's range. */
@@ -115,8 +119,9 @@ describe('realistic contract (docx)', () => {
     const outBytes = new Uint8Array(await blob.arrayBuffer());
     const newDoc = await parseDocx(toDocxFile(outBytes, 'contract-redacted.docx'));
 
+    const unmarkedText = removeGeneratedMarkers(newDoc.text);
     for (const item of items.filter((i) => i.active)) {
-      expect(newDoc.text.includes(item.original)).toBe(false);
+      expect(unmarkedText.includes(item.original)).toBe(false);
     }
     expect(newDoc.text).not.toMatch(ID_RE);
 
@@ -182,8 +187,9 @@ describe('realistic contract (pdf)', () => {
     const newPageCount = (await PDFDocument.load(outBytes)).getPageCount();
     expect(newPageCount).toBe(3);
 
+    const unmarkedText = removeGeneratedMarkers(newDoc.text);
     for (const item of items.filter((i) => i.active)) {
-      expect(newDoc.text.includes(item.original)).toBe(false);
+      expect(unmarkedText.includes(item.original)).toBe(false);
     }
 
     const markers = parseMarkers(newDoc.text);
@@ -214,8 +220,9 @@ describe('realistic quotation (docx)', () => {
     const outBytes = new Uint8Array(await blob.arrayBuffer());
     const newDoc = await parseDocx(toDocxFile(outBytes, 'quotation-redacted.docx'));
 
+    const unmarkedText = removeGeneratedMarkers(newDoc.text);
     for (const item of items.filter((i) => i.active)) {
-      expect(newDoc.text.includes(item.original)).toBe(false);
+      expect(unmarkedText.includes(item.original)).toBe(false);
     }
     const markers = parseMarkers(newDoc.text);
     expect(markers.length).toBe(items.filter((i) => i.active).length);
@@ -249,8 +256,9 @@ describe('realistic quotation (pdf)', () => {
     const newPageCount = (await PDFDocument.load(outBytes)).getPageCount();
     expect(newPageCount).toBe(3);
 
+    const unmarkedText = removeGeneratedMarkers(newDoc.text);
     for (const item of items.filter((i) => i.active)) {
-      expect(newDoc.text.includes(item.original)).toBe(false);
+      expect(unmarkedText.includes(item.original)).toBe(false);
     }
     const markers = parseMarkers(newDoc.text);
     expect(markers.length).toBe(items.filter((i) => i.active).length);
@@ -272,15 +280,16 @@ describe('realistic customers workbook (xlsx)', () => {
     const customerNames = custLines.map((l) => l.split('\t')[1]);
     expect(customerNames.length).toBe(60);
 
-    const items = detect(originalDoc.text, BUILTIN_PATTERNS);
+    const items = detectDocument(originalDoc, BUILTIN_PATTERNS);
     expect(countActive(items, '身分證')).toBeGreaterThanOrEqual(60);
     const idCov = coverage(originalDoc.text, ID_RE, items);
     expect(idCov.missed, `uncovered IDs: ${JSON.stringify(idCov.missed)}`).toEqual([]);
 
-    // Numeric column (累計消費) values are not processed at all (documented limitation).
+    // Numeric cells under a financial column header are included; unrelated numeric cells remain out of scope.
     const consumptionValues = spec.sheets[0].rows.slice(1).map((r) => r[13] as number);
+    expect(countActive(items, '財務金額')).toBe(60);
     for (const v of consumptionValues.slice(0, 10)) {
-      expect(originalDoc.text).not.toContain(String(v));
+      expect(originalDoc.text).toContain(String(v));
     }
 
     const { edits, mapping } = applyRedactions(originalDoc.text, items);
@@ -288,8 +297,9 @@ describe('realistic customers workbook (xlsx)', () => {
     const outBytes = new Uint8Array(await blob.arrayBuffer());
     const newDoc = await parseXlsx(toXlsxFile(outBytes, 'customers-redacted.xlsx'));
 
+    const unmarkedText = removeGeneratedMarkers(newDoc.text);
     for (const item of items.filter((i) => i.active)) {
-      expect(newDoc.text.includes(item.original)).toBe(false);
+      expect(unmarkedText.includes(item.original)).toBe(false);
     }
     const markers = parseMarkers(newDoc.text);
     expect(markers.length).toBe(items.filter((i) => i.active).length);

@@ -1,6 +1,6 @@
 import type { Category, LoadedDocument, RedactionItem } from '../core/types';
 import { CATEGORIES } from '../core/types';
-import { addManualItem, detect, toggleItem } from '../core/detector';
+import { addManualItem, detectDocument, toggleItem } from '../core/detector';
 import { applyRedactions } from '../core/redactor';
 import { CodeBook, buildMarker, parseMarkers } from '../core/codes';
 import { maskDisplay } from '../core/mask';
@@ -109,7 +109,7 @@ async function importFiles(files: File[], root: HTMLElement): Promise<void> {
     try {
       const doc = await parseDocument(file);
       const book = new CodeBook();
-      const d: DocState = { doc, items: detect(doc.text, getEffectivePatterns(), book), book, downloadedDoc: false, downloadedCsv: false };
+      const d: DocState = { doc, items: detectDocument(doc, getEffectivePatterns(), book), book, downloadedDoc: false, downloadedCsv: false };
       applyDisabledCategories(d);
       state.docs.push(d);
       if (firstNew < 0) firstNew = state.docs.length - 1;
@@ -132,7 +132,7 @@ async function importFiles(files: File[], root: HTMLElement): Promise<void> {
 function redetect(root: HTMLElement): void {
   const d = current();
   const manual = d.items.filter((it) => it.origin === 'manual');
-  const fresh = detect(d.doc.text, getEffectivePatterns(), d.book).filter((a) => !manual.some((m) => m.active && a.start < m.end && a.end > m.start));
+  const fresh = detectDocument(d.doc, getEffectivePatterns(), d.book).filter((a) => !manual.some((m) => m.active && a.start < m.end && a.end > m.start));
   d.items = [...manual, ...fresh].sort((a, b) => a.start - b.start);
   applyDisabledCategories(d);
   markDirty(d);
@@ -188,9 +188,9 @@ function renderSafetyCard(): HTMLElement {
     el('p', {}, '這是文件處理與覆核輔助工具，不代表法規、GxP 或公司 SOP 的最終判定。'),
     el('ul', {},
       el('li', {}, '自動偵測完成後，請逐頁／逐工作表覆核；漏抓內容可在預覽中圈選新增。'),
-      el('li', {}, 'Excel 的數值型儲存格、公式結果、註解、隱藏工作表與部分中繼資料不在目前偵測範圍。'),
+      el('li', {}, 'Excel 帶有財務欄位標籤的數值型金額會偵測；公式儲存格維持原樣，公式結果、註解、隱藏工作表與部分中繼資料仍不在目前範圍。'),
       el('li', {}, '掃描型 PDF 沒有文字層時無法處理；請先 OCR，並確認 OCR 結果沒有錯字或漏字。'),
-      el('li', {}, '日期、試驗編號、批號與產品代碼可能影響業務判讀；下載前請依用途決定是否保留或替換。'),
+      el('li', {}, '財務金額、日期、試驗編號、批號與產品代碼可能影響業務判讀；下載前請依用途決定是否保留或替換。'),
       el('li', {}, 'CSV 編碼表可以還原原文，請視同原始機密文件保存與傳遞。'),
     ),
   );
@@ -296,7 +296,7 @@ function renderWorkspace(root: HTMLElement): HTMLElement {
   const listToggleHost = el('div', { class: 'list-toggle-host' });
   const previewWrap = el('div', { class: 'preview-wrap' },
     el('div', { class: 'preview-head' }, el('h3', {}, '去識別化預覽'), listToggleHost),
-    el('p', { class: 'muted small' }, `${previewHint(d.doc)}預覽以遮罩樣式呈現；滑鼠移到標記可看原文與輸出標記，點擊標記可取消；圈選文字可手動新增項目。日期、批號與產品代碼請特別確認。`),
+    el('p', { class: 'muted small' }, `${previewHint(d.doc)}預覽以遮罩樣式呈現；滑鼠移到標記可看原文與輸出標記，點擊標記可取消；圈選文字可手動新增項目。財務金額、日期、批號與產品代碼請特別確認。`),
     legendHost,
     preview,
   );

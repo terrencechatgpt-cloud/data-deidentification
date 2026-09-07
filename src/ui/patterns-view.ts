@@ -52,7 +52,7 @@ function render(root: HTMLElement, editing: CustomPatternConfig | null = null): 
   root.append(
     el('h2', {}, '偵測規則'),
     el('p', { class: 'muted' }, '內建規則涵蓋一般個資，以及公文、合約、財務與臨床研究常見識別資訊。所有規則皆以正規表達式（JavaScript RegExp，flags: gu）比對；內建規則可停用但不可修改，自訂規則可新增、編輯、刪除。設定僅儲存在你的瀏覽器中。'),
-    el('p', { class: 'notice' }, '日期、批號、產品代碼與試驗編號不一定在每個交付情境都應移除；請依文件用途、資料共享對象與公司 SOP 逐筆覆核。'),
+      el('p', { class: 'notice' }, '財務金額、日期、批號、產品代碼與試驗編號不一定在每個交付情境都應移除；請依文件用途、資料共享對象與公司 SOP 逐筆覆核。'),
     renderTable(root, config, patterns),
     renderForm(root, config, editing),
   );

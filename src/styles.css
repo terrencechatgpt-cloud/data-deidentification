@@ -19,6 +19,7 @@
   --mark-統編: #b2ebf2;
   --mark-銀行帳號: #c5cae9;
   --mark-信用卡: #d1c4e9;
+  --mark-財務金額: #ef9a9a;
   --mark-發票／單據號碼: #b3e5fc;
   --mark-合約／採購編號: #c8e6c9;
   --mark-日期: #ffccbc;
@@ -119,6 +120,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .mark-統編 { background: var(--mark-統編); }
 .mark-銀行帳號 { background: var(--mark-銀行帳號); }
 .mark-信用卡 { background: var(--mark-信用卡); }
+.mark-財務金額 { background: var(--mark-財務金額); }
 .mark-發票／單據號碼 { background: var(--mark-發票／單據號碼); }
 .mark-合約／採購編號 { background: var(--mark-合約／採購編號); }
 .mark-日期 { background: var(--mark-日期); }
@@ -147,6 +149,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .badge-統編 { background: var(--mark-統編); }
 .badge-銀行帳號 { background: var(--mark-銀行帳號); }
 .badge-信用卡 { background: var(--mark-信用卡); }
+.badge-財務金額 { background: var(--mark-財務金額); }
 .badge-發票／單據號碼 { background: var(--mark-發票／單據號碼); }
 .badge-合約／採購編號 { background: var(--mark-合約／採購編號); }
 .badge-日期 { background: var(--mark-日期); }

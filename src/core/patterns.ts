@@ -74,6 +74,7 @@ const hasContext = (before: string, pattern: RegExp): boolean => pattern.test(be
 const MRN_CONTEXT = /(?:病歷(?:號|編號)|就診號|MRN|medical\s+record)\s*[:：#-]?\s*$/iu;
 const BANK_CONTEXT = /(?:銀行|匯款|收款|付款|帳號|賬號|account|acct)[^\n]{0,30}$/iu;
 const CARD_CONTEXT = /(?:信用卡|卡號|credit\s*card)[^\n]{0,20}$/iu;
+const AMOUNT_CONTEXT = /(?:還款(?:金額|款項|總額)?|退款(?:金額|款項|總額)?|償還(?:金額|款項|總額)?|付款(?:金額|款項|總額)?|支付(?:金額|款項|總額)?|應(?:付|收)(?:金額|款項|總額)?|金額|款項|總額|總計|合計|小計|單價|報價|折扣|收入|營收|支出|費用|成本|預算|稅額|稅金|消費|營業額|回款|借款|貸款|本金|利息|餘額|amount(?:\s+(?:due|paid|total))?|payment|repayment|refund|revenue|income|expense|cost|budget|price|total|subtotal|tax|balance|principal|interest)[\s:：#-]*(?:NT\$|NTD|TWD|USD|EUR|JPY|CNY|RMB|新臺幣|新台幣|人民幣|美元|歐元|日圓|[$＄¥￥])?[\s]*$/iu;
 
 const PHARMA_ID_REGEX =
   '(?<![A-Za-z0-9\\u4e00-\\u9fa5])(?:SUBJ|SUBJECT|PT|PATIENT|CASE)[-_ ]?[A-Z0-9-]{2,20}(?![A-Za-z0-9])';
@@ -88,6 +89,7 @@ const PRODUCT_CODE_REGEX =
 const CONTRACT_CODE_REGEX =
   '(?<![A-Za-z0-9])(?:CON|CONTRACT|PO|PR|DOC|MEMO|SC)[-_][A-Z0-9-]{3,24}(?![A-Za-z0-9])';
 const INVOICE_REGEX = '(?<![A-Za-z0-9])[A-Z]{2}\\d{8}(?![A-Za-z0-9])';
+const AMOUNT_REGEX = '(?<![\\d./-])(?:\\d{1,3}(?:,\\d{3})+|\\d{3,12}(?:\\.\\d{1,2})?|\\d{1,2}\\.\\d{1,2})(?![\\d./-]|\\s*%)';
 const DATE_REGEX =
   '(?<![\\d])(?:(?:19|20)\\d{2}[-/.]\\d{1,2}[-/.]\\d{1,2}|民國\\d{2,3}年\\d{1,2}月\\d{1,2}日)(?![\\d])';
 
@@ -211,6 +213,17 @@ export const BUILTIN_PATTERNS: Pattern[] = [
     enabled: true,
     domain: 'pharma',
     validate: (_match, before) => hasContext(before, CARD_CONTEXT),
+  },
+  {
+    id: 'finance-amount',
+    name: '還款／付款／財務金額',
+    category: '財務金額',
+    source: 'builtin',
+    regex: AMOUNT_REGEX,
+    example: '還款金額：NT$ 1,234,567 元、應付金額 800.50 元',
+    enabled: true,
+    domain: 'pharma',
+    validate: (_match, before) => hasContext(before, AMOUNT_CONTEXT),
   },
   {
     id: 'finance-invoice',

@@ -40,6 +40,8 @@ describe('pharmaceutical document patterns', () => {
     expect(matches('finance-bank-account', '一般數字 013123456789')).toEqual([]);
     expect(matches('finance-credit-card', '信用卡號：4111-1111-1111-1111')).toEqual(['4111-1111-1111-1111']);
     expect(matches('finance-credit-card', '測試序號 4111-1111-1111-1111')).toEqual([]);
+    expect(matches('finance-amount', '還款金額：NT$ 1,234,567 元；應付金額 800.50 元')).toEqual(['1,234,567', '800.50']);
+    expect(matches('finance-amount', '一般數字 1,234,567；還款日期 2026-09-08')).toEqual([]);
     expect(matches('pharma-mrn', '病歷號：2026090801')).toEqual(['2026090801']);
     expect(matches('pharma-mrn', '實驗數據 2026090801')).toEqual([]);
   });

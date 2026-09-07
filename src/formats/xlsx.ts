@@ -20,6 +20,8 @@ interface SheetInfo {
 export interface XlsxHandle {
   zip: JSZip;
   sheets: SheetInfo[];
+  sharedStrings: string[];
+  financialRanges: { start: number; end: number }[];
   /** Pristine xl/sharedStrings.xml, kept so every generation scrubs from the original. */
   sharedStringsXml: string | null;
   segments: Segment[];
@@ -95,12 +97,45 @@ async function sheetPaths(zip: JSZip): Promise<{ path: string; name: string }[]>
     .map((path) => ({ path, name: path.replace(/^.*\//, '').replace(/\.xml$/, '') }));
 }
 
-/** Text-bearing cells in document order: shared-string and inline-string cells. */
-function textCells(doc: Document): Element[] {
-  return Array.from(doc.getElementsByTagNameNS(MAIN_NS, 'c')).filter((c) => {
-    const t = c.getAttribute('t');
-    return t === 's' || t === 'inlineStr';
-  });
+/** Financial labels that make a numeric cell worth scanning; unlabeled numbers stay untouched. */
+const FINANCIAL_HEADER = /(?:還款|退款|償還|付款|支付|應付|應收|金額|款項|總額|總計|合計|小計|單價|報價|折扣|收入|營收|支出|費用|成本|預算|稅額|稅金|消費|營業額|回款|借款|貸款|本金|利息|餘額|amount|payment|repayment|refund|revenue|income|expense|cost|budget|price|total|subtotal|tax|balance|principal|interest)/iu;
+
+function isFormula(c: Element): boolean {
+  return c.getElementsByTagNameNS(MAIN_NS, 'f').length > 0;
+}
+
+function isStringCell(c: Element): boolean {
+  const t = c.getAttribute('t');
+  return t === 's' || t === 'inlineStr';
+}
+
+function isNumericCell(c: Element): boolean {
+  const t = c.getAttribute('t');
+  return (t === null || t === 'n') && c.getElementsByTagNameNS(MAIN_NS, 'v').length > 0;
+}
+
+function hasFinancialLabel(text: string): boolean {
+  return FINANCIAL_HEADER.test(text);
+}
+
+function isFinancialNumericCell(c: Element, doc: Document, shared: string[]): boolean {
+  if (!isNumericCell(c) || isFormula(c)) return false;
+  const target = cellCoords(c.getAttribute('r') ?? '');
+  return Array.from(doc.getElementsByTagNameNS(MAIN_NS, 'c'))
+    .filter((candidate) => !isFormula(candidate) && isStringCell(candidate))
+    .some((candidate) => {
+      const candidateCoords = cellCoords(candidate.getAttribute('r') ?? '');
+      const sameRow = candidateCoords.row === target.row;
+      const nearbyHeader = candidateCoords.col === target.col && candidateCoords.row < target.row;
+      return (sameRow || nearbyHeader) && hasFinancialLabel(cellText(candidate, shared));
+    });
+}
+
+/** Detectable value cells in document order: text cells and labelled, non-formula numeric cells. */
+function textCells(doc: Document, shared: string[]): Element[] {
+  return Array.from(doc.getElementsByTagNameNS(MAIN_NS, 'c')).filter(
+    (c) => !isFormula(c) && (isStringCell(c) || isFinancialNumericCell(c, doc, shared)),
+  );
 }
 
 function cellText(c: Element, shared: string[]): string {
@@ -110,7 +145,8 @@ function cellText(c: Element, shared: string[]): string {
     return Number.isInteger(idx) ? (shared[idx] ?? '') : '';
   }
   const is = c.getElementsByTagNameNS(MAIN_NS, 'is')[0];
-  return is ? textOf(is) : '';
+  if (is) return textOf(is);
+  return c.getElementsByTagNameNS(MAIN_NS, 'v')[0]?.textContent ?? '';
 }
 
 function rowOf(c: Element): string {
@@ -127,6 +163,7 @@ export async function parseXlsx(file: File): Promise<LoadedDocument> {
   const segments: Segment[] = [];
   const cells: CellRef[] = [];
   const layoutSheets: { name: string; cells: XlsxCellLayout[] }[] = [];
+  const financialRanges: { start: number; end: number }[] = [];
   let text = '';
 
   for (const [sheetIdx, { path, name }] of paths.entries()) {
@@ -134,7 +171,7 @@ export async function parseXlsx(file: File): Promise<LoadedDocument> {
     sheets.push({ path, doc });
     const layoutCells: XlsxCellLayout[] = [];
     let lastRow = '';
-    textCells(doc).forEach((c, cellIdx) => {
+    textCells(doc, shared).forEach((c, cellIdx) => {
       const t = cellText(c, shared);
       if (t.length === 0) return;
       const row = rowOf(c);
@@ -143,6 +180,7 @@ export async function parseXlsx(file: File): Promise<LoadedDocument> {
       const coords = cellCoords(c.getAttribute('r') ?? '');
       segments.push({ start: text.length, end: text.length + t.length, text: t });
       layoutCells.push({ start: text.length, end: text.length + t.length, ...coords });
+      if (isNumericCell(c)) financialRanges.push({ start: text.length, end: text.length + t.length });
       cells.push({ sheetIdx, cellIdx });
       text += t;
     });
@@ -152,7 +190,7 @@ export async function parseXlsx(file: File): Promise<LoadedDocument> {
   }
 
   const sharedStringsXml = (await zip.file('xl/sharedStrings.xml')?.async('string')) ?? null;
-  const handle: XlsxHandle = { zip, sheets, sharedStringsXml, segments, cells };
+  const handle: XlsxHandle = { zip, sheets, sharedStrings: shared, financialRanges, sharedStringsXml, segments, cells };
   return { fileName: file.name, format: 'xlsx', text, handle, layout: { kind: 'xlsx', sheets: layoutSheets } };
 }
 
@@ -211,7 +249,7 @@ export async function generateXlsx(doc: LoadedDocument, edits: TextEdit[]): Prom
     const clone = sheet.doc.cloneNode(true) as Document;
     const cellChanges = perSheet.get(sheetIdx);
     if (cellChanges) {
-      const cells = textCells(clone);
+      const cells = textCells(clone, handle.sharedStrings);
       for (const [cellIdx, value] of cellChanges) setInlineString(cells[cellIdx], value);
     }
     for (const c of Array.from(clone.getElementsByTagNameNS(MAIN_NS, 'c'))) {
