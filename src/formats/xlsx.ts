@@ -16,7 +16,7 @@ interface SheetInfo {
   path: string;
   /** The original worksheet XML, retained so generation can rewrite only changed cells. */
   xml: string;
-  /** Every cell in document order, including formulas and cells that are not detectable. */
+  /** Every value-bearing string/numeric cell in document order; formulas and blank cells are skipped. */
   allCells: CellInfo[];
   /** Text cells plus labelled financial numeric cells, in document order. */
   detectableCells: CellInfo[];
@@ -80,6 +80,20 @@ function decodeXmlText(value: string): string {
     .replace(/&amp;/g, '&');
 }
 
+function isXmlWhitespace(value: string | undefined): boolean {
+  return value === ' ' || value === '\t' || value === '\r' || value === '\n';
+}
+
+function isXmlTagBoundary(value: string | undefined): boolean {
+  return value === undefined || isXmlWhitespace(value) || value === '/' || value === '>';
+}
+
+function isSelfClosingTag(tag: string): boolean {
+  let cursor = tag.length - 2;
+  while (cursor >= 0 && isXmlWhitespace(tag[cursor])) cursor -= 1;
+  return tag[cursor] === '/';
+}
+
 /** Extracts visible text from one <si> while ignoring phonetic hints and preserving rich text runs. */
 function visibleSharedString(body: string): string {
   let out = '';
@@ -88,7 +102,7 @@ function visibleSharedString(body: string): string {
     const start = body.indexOf('<t', searchFrom);
     if (start < 0) break;
     const marker = body[start + 2];
-    if (marker !== undefined && !/[\s/>]/.test(marker)) {
+    if (!isXmlTagBoundary(marker)) {
       searchFrom = start + 2;
       continue;
     }
@@ -112,7 +126,7 @@ function parseSharedStringsXml(xml: string): string[] | null {
     const start = xml.indexOf('<si', searchFrom);
     if (start < 0) break;
     const marker = xml[start + 3];
-    if (marker !== undefined && !/[\s/>]/.test(marker)) {
+    if (!isXmlTagBoundary(marker)) {
       searchFrom = start + 3;
       continue;
     }
@@ -147,11 +161,17 @@ async function loadSharedStrings(zip: JSZip): Promise<{ values: string[]; xml: s
 }
 
 function cellCoords(ref: string): { row: number; col: number } {
-  const m = ref.match(/^([A-Z]+)(\d+)$/i);
-  if (!m) return { row: 0, col: 0 };
+  let cursor = 0;
   let col = 0;
-  for (const ch of m[1].toUpperCase()) col = col * 26 + (ch.charCodeAt(0) - 64);
-  return { row: Number(m[2]), col };
+  while (cursor < ref.length) {
+    const code = ref.charCodeAt(cursor) & ~32;
+    if (code < 65 || code > 90) break;
+    col = col * 26 + (code - 64);
+    cursor += 1;
+  }
+  if (cursor === 0 || cursor === ref.length) return { row: 0, col: 0 };
+  const row = Number(ref.slice(cursor));
+  return Number.isInteger(row) ? { row, col } : { row: 0, col: 0 };
 }
 
 async function sheetPaths(zip: JSZip): Promise<{ path: string; name: string }[]> {
@@ -215,20 +235,20 @@ function isFinancialNumericCell(c: CellInfo, labels: FinancialLabelIndex): boole
 
 function xmlAttributeValue(tag: string, name: string): string | null {
   let cursor = 1;
-  while (cursor < tag.length && !/[\s/>]/.test(tag[cursor])) cursor += 1;
+  while (cursor < tag.length && !isXmlTagBoundary(tag[cursor])) cursor += 1;
   while (cursor < tag.length) {
-    while (cursor < tag.length && /\s/.test(tag[cursor])) cursor += 1;
+    while (cursor < tag.length && isXmlWhitespace(tag[cursor])) cursor += 1;
     if (cursor >= tag.length || tag[cursor] === '>' || tag[cursor] === '/') return null;
     const nameStart = cursor;
-    while (cursor < tag.length && !/[\s=/>]/.test(tag[cursor])) cursor += 1;
+    while (cursor < tag.length && !isXmlWhitespace(tag[cursor]) && tag[cursor] !== '=' && tag[cursor] !== '/' && tag[cursor] !== '>') cursor += 1;
     const attributeName = tag.slice(nameStart, cursor);
-    while (cursor < tag.length && /\s/.test(tag[cursor])) cursor += 1;
+    while (cursor < tag.length && isXmlWhitespace(tag[cursor])) cursor += 1;
     if (tag[cursor] !== '=') {
       while (cursor < tag.length && tag[cursor] !== '>' && tag[cursor] !== '/') cursor += 1;
       continue;
     }
     cursor += 1;
-    while (cursor < tag.length && /\s/.test(tag[cursor])) cursor += 1;
+    while (cursor < tag.length && isXmlWhitespace(tag[cursor])) cursor += 1;
     const quote = tag[cursor];
     if (quote !== '"' && quote !== "'") continue;
     cursor += 1;
@@ -247,7 +267,7 @@ function findXmlTag(source: string, name: string, from: number): number {
     const start = source.indexOf(`<${name}`, cursor);
     if (start < 0) return -1;
     const marker = source[start + name.length + 1];
-    if (marker === undefined || /[\s/>]/.test(marker)) return start;
+    if (isXmlTagBoundary(marker)) return start;
     cursor = start + name.length + 1;
   }
   return -1;
@@ -258,7 +278,7 @@ function xmlChild(source: string, name: string): { present: boolean; value: stri
   if (start < 0) return { present: false, value: '' };
   const openEnd = source.indexOf('>', start + name.length + 1);
   if (openEnd < 0) return { present: false, value: '' };
-  if (/\/\s*>$/.test(source.slice(start, openEnd + 1))) return { present: true, value: '' };
+  if (isSelfClosingTag(source.slice(start, openEnd + 1))) return { present: true, value: '' };
   const close = source.indexOf(`</${name}`, openEnd + 1);
   if (close < 0) return { present: false, value: '' };
   // Keep the child XML raw. Inline strings may contain escaped text that looks like XML after
@@ -268,29 +288,37 @@ function xmlChild(source: string, name: string): { present: boolean; value: stri
 }
 
 /** Reads worksheet cells in one linear pass without constructing a DOM for the whole sheet. */
-async function scanWorksheetCells(
+export async function scanWorksheetCells(
   xml: string,
   shared: string[],
   onProgress?: (progress: number) => void,
 ): Promise<CellInfo[]> {
   const cells: CellInfo[] = [];
   let searchFrom = 0;
+  let scannedCells = 0;
   while (searchFrom < xml.length) {
     const start = findXmlTag(xml, 'c', searchFrom);
     if (start < 0) break;
     const openEnd = xml.indexOf('>', start + 2);
     if (openEnd < 0) throw new Error('無法解析工作表儲存格');
     const openTag = xml.slice(start, openEnd + 1);
-    const selfClosing = /\/\s*>$/.test(openTag);
+    const selfClosing = isSelfClosingTag(openTag);
     let end = openEnd + 1;
-    let body = '';
-    if (!selfClosing) {
-      const close = xml.indexOf('</c', end);
-      const closeEnd = close < 0 ? -1 : xml.indexOf('>', close + 3);
-      if (close < 0 || closeEnd < 0) throw new Error('無法解析工作表儲存格');
-      body = xml.slice(end, close);
-      end = closeEnd + 1;
+    scannedCells += 1;
+    if (selfClosing) {
+      searchFrom = end;
+      if (onProgress && (scannedCells === 1 || scannedCells % 500 === 0 || searchFrom >= xml.length)) {
+        onProgress(xml.length === 0 ? 1 : searchFrom / xml.length);
+        await yieldToBrowser();
+      }
+      continue;
     }
+    let body = '';
+    const close = xml.indexOf('</c', end);
+    const closeEnd = close < 0 ? -1 : xml.indexOf('>', close + 3);
+    if (close < 0 || closeEnd < 0) throw new Error('無法解析工作表儲存格');
+    body = xml.slice(end, close);
+    end = closeEnd + 1;
 
     const type = xmlAttributeValue(openTag, 't');
     const ref = xmlAttributeValue(openTag, 'r') ?? '';
@@ -315,9 +343,11 @@ async function scanWorksheetCells(
         text = value.value;
       }
     }
-    cells.push({ start, end, type, formula, string, numeric, text, sharedIndex, ...coords });
     searchFrom = end;
-    if (onProgress && (cells.length === 1 || cells.length % 500 === 0 || searchFrom >= xml.length)) {
+    if (!formula && (string ? value.present || inline.present : numeric)) {
+      cells.push({ start, end, type, formula, string, numeric, text, sharedIndex, ...coords });
+    }
+    if (onProgress && (scannedCells === 1 || scannedCells % 500 === 0 || searchFrom >= xml.length)) {
       onProgress(xml.length === 0 ? 1 : searchFrom / xml.length);
       await yieldToBrowser();
     }
@@ -336,6 +366,71 @@ function yieldToBrowser(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+interface ScannerWorkerMessage {
+  requestId: number;
+  kind: 'progress' | 'done' | 'error';
+  progress?: number;
+  cells?: CellInfo[];
+  message?: string;
+}
+
+interface WorksheetScanner {
+  scan(xml: string, shared: string[], onProgress?: (progress: number) => void): Promise<CellInfo[]>;
+  terminate(): void;
+}
+
+/** Keeps a very large worksheet from monopolising the page's main thread while it is scanned. */
+function createWorksheetScanner(): WorksheetScanner | null {
+  if (typeof Worker === 'undefined') return null;
+  let worker: Worker;
+  try {
+    worker = new Worker(new URL('./xlsx-scan-worker.ts', import.meta.url), { type: 'module' });
+  } catch {
+    return null;
+  }
+  let nextRequestId = 0;
+  const pending = new Map<number, {
+    resolve: (cells: CellInfo[]) => void;
+    reject: (error: Error) => void;
+    onProgress?: (progress: number) => void;
+  }>();
+  const terminate = () => {
+    worker.terminate();
+    for (const request of pending.values()) request.reject(new Error('Excel 工作表掃描已中止'));
+    pending.clear();
+  };
+  worker.onmessage = (event: MessageEvent<ScannerWorkerMessage>) => {
+    const message = event.data;
+    const request = pending.get(message.requestId);
+    if (!request) return;
+    if (message.kind === 'progress') {
+      request.onProgress?.(message.progress ?? 0);
+      return;
+    }
+    pending.delete(message.requestId);
+    if (message.kind === 'error') {
+      worker.terminate();
+      request.reject(new Error(message.message ?? '無法解析工作表'));
+      return;
+    }
+    request.resolve(message.cells ?? []);
+  };
+  worker.onerror = () => {
+    const error = new Error('Excel 工作表掃描失敗');
+    for (const request of pending.values()) request.reject(error);
+    pending.clear();
+    worker.terminate();
+  };
+  return {
+    scan: (xml, shared, onProgress) => new Promise<CellInfo[]>((resolve, reject) => {
+      const requestId = nextRequestId++;
+      pending.set(requestId, { resolve, reject, onProgress });
+      worker.postMessage({ requestId, xml, shared });
+    }),
+    terminate,
+  };
+}
+
 export async function parseXlsx(file: File, onProgress?: (progress: ParseProgress) => void): Promise<LoadedDocument> {
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   onProgress?.({ stage: 'xlsx-read', sheet: 0, totalSheets: 0, progress: 0.08 });
@@ -351,6 +446,7 @@ export async function parseXlsx(file: File, onProgress?: (progress: ParseProgres
   const layoutSheets: { name: string; cells: XlsxCellLayout[] }[] = [];
   const financialRanges: { start: number; end: number }[] = [];
   let text = '';
+  const worksheetScanner = createWorksheetScanner();
 
   for (const [sheetIdx, { path, name }] of paths.entries()) {
     const reportSheetProgress = (phase: number) => {
@@ -366,7 +462,9 @@ export async function parseXlsx(file: File, onProgress?: (progress: ParseProgres
     const xml = await zip.file(path)!.async('string');
     const layoutCells: XlsxCellLayout[] = [];
     let lastRow = '';
-    const allCells = await scanWorksheetCells(xml, shared, (progress) => reportSheetProgress(0.04 + progress * 0.56));
+    const scan = worksheetScanner?.scan(xml, shared, (progress) => reportSheetProgress(0.04 + progress * 0.56))
+      ?? scanWorksheetCells(xml, shared, (progress) => reportSheetProgress(0.04 + progress * 0.56));
+    const allCells = await scan;
     const detectedCells = textCells(allCells);
     sheets.push({ path, xml, allCells, detectableCells: detectedCells });
     for (const [cellIdx, cell] of detectedCells.entries()) {
@@ -391,6 +489,7 @@ export async function parseXlsx(file: File, onProgress?: (progress: ParseProgres
     if (!text.endsWith('\n')) text += '\n';
     text += '\n';
   }
+  worksheetScanner?.terminate();
 
   const sharedStringsXml = sharedTable.xml;
   const handle: XlsxHandle = { zip, sheets, sharedStrings: shared, financialRanges, sharedStringsXml, segments, cells };
