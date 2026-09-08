@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import type { LoadedDocument, TextEdit, XlsxCellLayout } from '../core/types';
 import { distributeEdits, type Segment } from './segments';
+import type { ParseProgress } from './index';
 
 const MAIN_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const XML_NS = 'http://www.w3.org/XML/1998/namespace';
@@ -15,6 +16,16 @@ interface CellRef {
 interface SheetInfo {
   path: string;
   doc: Document;
+}
+
+interface CellInfo {
+  element: Element;
+  formula: boolean;
+  string: boolean;
+  numeric: boolean;
+  text: string;
+  row: number;
+  col: number;
 }
 
 export interface XlsxHandle {
@@ -100,20 +111,6 @@ async function sheetPaths(zip: JSZip): Promise<{ path: string; name: string }[]>
 /** Financial labels that make a numeric cell worth scanning; unlabeled numbers stay untouched. */
 const FINANCIAL_HEADER = /(?:還款|退款|償還|付款|支付|應付|應收|金額|款項|總額|總計|合計|小計|單價|報價|折扣|收入|營收|支出|費用|成本|預算|稅額|稅金|消費|營業額|回款|借款|貸款|本金|利息|餘額|amount|payment|repayment|refund|revenue|income|expense|cost|budget|price|total|subtotal|tax|balance|principal|interest)/iu;
 
-function isFormula(c: Element): boolean {
-  return c.getElementsByTagNameNS(MAIN_NS, 'f').length > 0;
-}
-
-function isStringCell(c: Element): boolean {
-  const t = c.getAttribute('t');
-  return t === 's' || t === 'inlineStr';
-}
-
-function isNumericCell(c: Element): boolean {
-  const t = c.getAttribute('t');
-  return (t === null || t === 'n') && c.getElementsByTagNameNS(MAIN_NS, 'v').length > 0;
-}
-
 function hasFinancialLabel(text: string): boolean {
   return FINANCIAL_HEADER.test(text);
 }
@@ -126,53 +123,86 @@ interface FinancialLabelIndex {
 }
 
 /** Builds the financial context once per worksheet instead of rescanning every cell for every number. */
-function buildFinancialLabelIndex(doc: Document, shared: string[]): FinancialLabelIndex {
+function buildFinancialLabelIndex(cells: CellInfo[]): FinancialLabelIndex {
   const labelRows = new Set<number>();
   const earliestLabelRowByCol = new Map<number, number>();
-  for (const candidate of Array.from(doc.getElementsByTagNameNS(MAIN_NS, 'c'))) {
-    if (isFormula(candidate) || !isStringCell(candidate) || !hasFinancialLabel(cellText(candidate, shared))) continue;
-    const { row, col } = cellCoords(candidate.getAttribute('r') ?? '');
-    labelRows.add(row);
-    const existing = earliestLabelRowByCol.get(col);
-    if (existing === undefined || row < existing) earliestLabelRowByCol.set(col, row);
+  for (const candidate of cells) {
+    if (candidate.formula || !candidate.string || !hasFinancialLabel(candidate.text)) continue;
+    labelRows.add(candidate.row);
+    const existing = earliestLabelRowByCol.get(candidate.col);
+    if (existing === undefined || candidate.row < existing) earliestLabelRowByCol.set(candidate.col, candidate.row);
   }
   return { labelRows, earliestLabelRowByCol };
 }
 
-function isFinancialNumericCell(c: Element, labels: FinancialLabelIndex): boolean {
-  if (!isNumericCell(c) || isFormula(c)) return false;
-  const target = cellCoords(c.getAttribute('r') ?? '');
-  return labels.labelRows.has(target.row) || (labels.earliestLabelRowByCol.get(target.col) ?? Number.POSITIVE_INFINITY) < target.row;
+function isFinancialNumericCell(c: CellInfo, labels: FinancialLabelIndex): boolean {
+  if (!c.numeric || c.formula) return false;
+  return labels.labelRows.has(c.row) || (labels.earliestLabelRowByCol.get(c.col) ?? Number.POSITIVE_INFINITY) < c.row;
+}
+
+async function inspectCells(
+  doc: Document,
+  shared: string[],
+  onProgress?: (progress: number) => void,
+): Promise<CellInfo[]> {
+  const domCells = doc.getElementsByTagNameNS(MAIN_NS, 'c');
+  const cells: CellInfo[] = [];
+  for (let index = 0; index < domCells.length; index += 1) {
+    const element = domCells[index];
+    const type = element.getAttribute('t');
+    let formula = false;
+    let value: Element | undefined;
+    let inline: Element | undefined;
+    for (const child of Array.from(element.children)) {
+      if (isMain(child, 'f')) formula = true;
+      else if (isMain(child, 'v')) value = child;
+      else if (isMain(child, 'is')) inline = child;
+    }
+    const string = type === 's' || type === 'inlineStr';
+    const numeric = (type === null || type === 'n') && value !== undefined;
+    const coords = string || numeric ? cellCoords(element.getAttribute('r') ?? '') : { row: 0, col: 0 };
+    let text = '';
+    if (!formula) {
+      if (type === 's') {
+        const idx = Number(value?.textContent ?? '');
+        text = Number.isInteger(idx) ? (shared[idx] ?? '') : '';
+      } else if (type === 'inlineStr') {
+        text = inline ? textOf(inline) : '';
+      } else if (numeric) {
+        text = value?.textContent ?? '';
+      }
+    }
+    cells.push({ element, formula, string, numeric, text, ...coords });
+    if (onProgress && (index === domCells.length - 1 || (index + 1) % 500 === 0)) {
+      onProgress(domCells.length === 0 ? 1 : 0.5 + ((index + 1) / domCells.length) * 0.5);
+      await yieldToBrowser();
+    }
+  }
+  return cells;
 }
 
 /** Detectable value cells in document order: text cells and labelled, non-formula numeric cells. */
-function textCells(doc: Document, shared: string[]): Element[] {
-  const labels = buildFinancialLabelIndex(doc, shared);
-  return Array.from(doc.getElementsByTagNameNS(MAIN_NS, 'c')).filter(
-    (c) => !isFormula(c) && (isStringCell(c) || isFinancialNumericCell(c, labels)),
-  );
+async function textCells(
+  doc: Document,
+  shared: string[],
+  onProgress?: (progress: number) => void,
+): Promise<CellInfo[]> {
+  const cells = await inspectCells(doc, shared, onProgress);
+  const labels = buildFinancialLabelIndex(cells);
+  return cells.filter((c) => !c.formula && (c.string || isFinancialNumericCell(c, labels)));
 }
 
-function cellText(c: Element, shared: string[]): string {
-  if (c.getAttribute('t') === 's') {
-    const v = c.getElementsByTagNameNS(MAIN_NS, 'v')[0];
-    const idx = Number(v?.textContent ?? '');
-    return Number.isInteger(idx) ? (shared[idx] ?? '') : '';
-  }
-  const is = c.getElementsByTagNameNS(MAIN_NS, 'is')[0];
-  if (is) return textOf(is);
-  return c.getElementsByTagNameNS(MAIN_NS, 'v')[0]?.textContent ?? '';
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function rowOf(c: Element): string {
-  return (c.getAttribute('r') ?? '').replace(/[A-Z]+/i, '');
-}
-
-export async function parseXlsx(file: File): Promise<LoadedDocument> {
+export async function parseXlsx(file: File, onProgress?: (progress: ParseProgress) => void): Promise<LoadedDocument> {
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  onProgress?.({ stage: 'xlsx-read', sheet: 0, totalSheets: 0, progress: 0.08 });
   const paths = await sheetPaths(zip);
   if (paths.length === 0) throw new Error('不是有效的 Excel (.xlsx) 檔案');
   const shared = await loadSharedStrings(zip);
+  onProgress?.({ stage: 'xlsx-read', sheet: 0, totalSheets: paths.length, progress: 0.18 });
 
   const sheets: SheetInfo[] = [];
   const segments: Segment[] = [];
@@ -182,23 +212,42 @@ export async function parseXlsx(file: File): Promise<LoadedDocument> {
   let text = '';
 
   for (const [sheetIdx, { path, name }] of paths.entries()) {
-    const doc = parseXml(await zip.file(path)!.async('string'), path);
+    const reportSheetProgress = (phase: number) => {
+      onProgress?.({
+        stage: 'xlsx-read',
+        sheet: sheetIdx + 1,
+        totalSheets: paths.length,
+        progress: Math.min(0.99, 0.18 + ((sheetIdx + Math.max(0, Math.min(1, phase))) / paths.length) * 0.82),
+      });
+    };
+    reportSheetProgress(0);
+    await yieldToBrowser();
+    const xml = await zip.file(path)!.async('string');
+    const doc = parseXml(xml, path);
+    reportSheetProgress(0.04);
+    await yieldToBrowser();
     sheets.push({ path, doc });
     const layoutCells: XlsxCellLayout[] = [];
     let lastRow = '';
-    textCells(doc, shared).forEach((c, cellIdx) => {
-      const t = cellText(c, shared);
-      if (t.length === 0) return;
-      const row = rowOf(c);
-      if (text.length > 0 && !text.endsWith('\n')) text += row === lastRow ? '\t' : '\n';
-      lastRow = row;
-      const coords = cellCoords(c.getAttribute('r') ?? '');
-      segments.push({ start: text.length, end: text.length + t.length, text: t });
-      layoutCells.push({ start: text.length, end: text.length + t.length, ...coords });
-      if (isNumericCell(c)) financialRanges.push({ start: text.length, end: text.length + t.length });
-      cells.push({ sheetIdx, cellIdx });
-      text += t;
-    });
+    const detectedCells = await textCells(doc, shared, (progress) => reportSheetProgress(progress * 0.6));
+    for (const [cellIdx, cell] of detectedCells.entries()) {
+      const t = cell.text;
+      if (t.length > 0) {
+        const row = String(cell.row);
+        if (text.length > 0 && !text.endsWith('\n')) text += row === lastRow ? '\t' : '\n';
+        lastRow = row;
+        const coords = { row: cell.row, col: cell.col };
+        segments.push({ start: text.length, end: text.length + t.length, text: t });
+        layoutCells.push({ start: text.length, end: text.length + t.length, ...coords });
+        if (cell.numeric) financialRanges.push({ start: text.length, end: text.length + t.length });
+        cells.push({ sheetIdx, cellIdx });
+        text += t;
+      }
+      if (cellIdx === detectedCells.length - 1 || (cellIdx + 1) % 500 === 0) {
+        reportSheetProgress(0.6 + (detectedCells.length === 0 ? 0.4 : ((cellIdx + 1) / detectedCells.length) * 0.4));
+        await yieldToBrowser();
+      }
+    }
     layoutSheets.push({ name, cells: layoutCells });
     if (!text.endsWith('\n')) text += '\n';
     text += '\n';
@@ -264,8 +313,8 @@ export async function generateXlsx(doc: LoadedDocument, edits: TextEdit[]): Prom
     const clone = sheet.doc.cloneNode(true) as Document;
     const cellChanges = perSheet.get(sheetIdx);
     if (cellChanges) {
-      const cells = textCells(clone, handle.sharedStrings);
-      for (const [cellIdx, value] of cellChanges) setInlineString(cells[cellIdx], value);
+      const cells = await textCells(clone, handle.sharedStrings);
+      for (const [cellIdx, value] of cellChanges) setInlineString(cells[cellIdx].element, value);
     }
     for (const c of Array.from(clone.getElementsByTagNameNS(MAIN_NS, 'c'))) {
       if (c.getAttribute('t') !== 's') continue;

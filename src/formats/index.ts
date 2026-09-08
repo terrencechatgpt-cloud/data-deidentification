@@ -2,12 +2,19 @@ import type { DocFormat, LoadedDocument, TextEdit } from '../core/types';
 import { MAX_FILE_BYTES } from '../core/types';
 import { generatePlainText, parsePlainText } from './plaintext';
 
-export interface ParseProgress {
-  stage: 'ocr-model' | 'ocr-render' | 'ocr-recognize';
-  page: number;
-  totalPages: number;
-  progress?: number;
-}
+export type ParseProgress =
+  | {
+      stage: 'ocr-model' | 'ocr-render' | 'ocr-recognize';
+      page: number;
+      totalPages: number;
+      progress?: number;
+    }
+  | {
+      stage: 'xlsx-read';
+      sheet: number;
+      totalSheets: number;
+      progress?: number;
+    };
 
 export interface ParseDocumentOptions {
   allowOcr?: boolean;
@@ -48,7 +55,7 @@ export async function parseDocument(file: File, options: ParseDocumentOptions = 
     case 'docx':
       return (await import('./docx')).parseDocx(file);
     case 'xlsx':
-      return (await import('./xlsx')).parseXlsx(file);
+      return (await import('./xlsx')).parseXlsx(file, options.onProgress);
     case 'pdf': {
       try {
         return await (await import('./pdf')).parsePdf(file);

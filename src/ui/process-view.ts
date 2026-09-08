@@ -91,7 +91,7 @@ export function createProcessView(): HTMLElement {
 // ---------------------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------------------
-/** Parsing a PDF/Word file (and loading its parser) can take a while: lock the page and show progress meanwhile. */
+/** Parsing a document (and loading its parser) can take a while: lock the page and show progress meanwhile. */
 function loadFiles(files: File[], root: HTMLElement): Promise<void> {
   return withBusy('讀取檔案中…', (reporter) => importFiles(files, root, reporter), {
     estimatedMs: estimateImportMs(files),
@@ -108,8 +108,8 @@ function fileFormat(file: File): string {
 
 /** A deliberately conservative estimate; the measured rate replaces it after the first progress update. */
 function estimateFileMs(file: File): number {
-  const base = fileFormat(file) === 'pdf' ? 4200 : fileFormat(file) === 'xlsx' ? 900 : fileFormat(file) === 'docx' ? 850 : 350;
-  const sizeMs = Math.min(9000, (file.size / (1024 * 1024)) * 650);
+  const base = fileFormat(file) === 'pdf' ? 4200 : fileFormat(file) === 'xlsx' ? 1800 : fileFormat(file) === 'docx' ? 850 : 350;
+  const sizeMs = Math.min(12000, (file.size / (1024 * 1024)) * (fileFormat(file) === 'xlsx' ? 900 : 650));
   return base + sizeMs;
 }
 
@@ -125,6 +125,18 @@ function estimateOutputMs(doc: LoadedDocument): number {
 function busyProgressForParse(fileIndex: number, fileCount: number, totalSteps: number, progress: ParseProgress): BusyProgress {
   const base = fileIndex * 2;
   const value = Math.max(0, Math.min(1, progress.progress ?? 0));
+  if (progress.stage === 'xlsx-read') {
+    const sheet = progress.sheet ?? 0;
+    const totalSheets = progress.totalSheets ?? 0;
+    return {
+      current: base + 0.08 + value * 0.84,
+      total: totalSteps,
+      indeterminate: progress.progress === undefined,
+      detail: totalSheets > 0 && sheet > 0
+        ? `正在解析 Excel 第 ${sheet} / ${totalSheets} 個工作表（檔案 ${fileIndex + 1} / ${fileCount}）`
+        : `正在讀取 Excel 結構（檔案 ${fileIndex + 1} / ${fileCount}）`,
+    };
+  }
   if (progress.stage === 'ocr-model') {
     return { current: base, total: totalSteps, indeterminate: true, detail: '正在準備瀏覽器內 OCR 引擎（首次使用會下載語言模型）' };
   }
@@ -135,12 +147,14 @@ function busyProgressForParse(fileIndex: number, fileCount: number, totalSteps: 
       detail: `正在準備 OCR 第 ${progress.page} / ${progress.totalPages} 頁（檔案 ${fileIndex + 1} / ${fileCount}）`,
     };
   }
-  const pageFraction = progress.totalPages > 0 ? (Math.max(0, progress.page - 1) + value) / progress.totalPages : value;
+  const page = progress.page ?? 0;
+  const totalPages = progress.totalPages ?? 0;
+  const pageFraction = totalPages > 0 ? (Math.max(0, page - 1) + value) / totalPages : value;
   return {
     current: base + 0.12 + Math.min(0.84, pageFraction * 0.84),
     total: totalSteps,
     indeterminate: progress.progress === undefined,
-    detail: `正在 OCR 第 ${progress.page} / ${progress.totalPages} 頁（檔案 ${fileIndex + 1} / ${fileCount}）`,
+    detail: `正在 OCR 第 ${page} / ${totalPages} 頁（檔案 ${fileIndex + 1} / ${fileCount}）`,
   };
 }
 
