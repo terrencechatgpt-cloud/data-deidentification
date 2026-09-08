@@ -25,7 +25,8 @@ export interface PreviewOptions {
  */
 function renderRange(parent: Node, text: string, start: number, end: number, decos: Decoration[]): void {
   let cursor = start;
-  for (const d of decos) {
+  for (let i = firstPossibleDecoration(decos, start); i < decos.length; i++) {
+    const d = decos[i];
     if (d.end <= start) continue;
     if (d.start >= end) break;
     const dStart = Math.max(d.start, start);
@@ -46,6 +47,20 @@ function renderRange(parent: Node, text: string, start: number, end: number, dec
 
 function textSpan(text: string, start: number): HTMLElement {
   return el('span', { 'data-start': String(start), 'data-plain': 'true' }, text);
+}
+
+/** Finds the first decoration that could overlap a range instead of rescanning the full list. */
+function firstPossibleDecoration(decos: Decoration[], start: number): number {
+  let low = 0;
+  let high = decos.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (decos[middle].start < start) low = middle + 1;
+    else high = middle;
+  }
+  let index = Math.max(0, low - 1);
+  while (index > 0 && decos[index - 1].end > start) index--;
+  return index;
 }
 
 function renderPlain(container: HTMLElement, doc: LoadedDocument, decos: Decoration[]): void {
@@ -113,6 +128,7 @@ function paragraphEl(p: DocxParagraphLayout, text: string, decos: Decoration[]):
 // Excel: sheet tabs plus a grid with column letters and row numbers.
 // ---------------------------------------------------------------------------------------
 const MAX_ROWS = 1000;
+const MAX_COLS = 60;
 
 /** Which sheet the grid shows and how far it is scrolled, carried over when the preview is re-rendered. */
 interface GridView {
@@ -143,18 +159,19 @@ function renderXlsx(container: HTMLElement, doc: LoadedDocument, decos: Decorati
     let maxRow = 0;
     let maxCol = 0;
     for (const c of sheet.cells) {
-      byCell.set(`${c.row},${c.col}`, c);
       maxRow = Math.max(maxRow, c.row);
       maxCol = Math.max(maxCol, c.col);
+      if (c.row <= MAX_ROWS && c.col <= MAX_COLS) byCell.set(`${c.row},${c.col}`, c);
     }
+    const visibleCols = Math.min(maxCol, MAX_COLS);
     const table = el('table', { class: 'sheet-table' });
     const head = el('tr', {}, el('th', {}, ''));
-    for (let c = 1; c <= maxCol; c++) head.append(el('th', {}, colName(c)));
+    for (let c = 1; c <= visibleCols; c++) head.append(el('th', {}, colName(c)));
     table.append(head);
     const rows = Math.min(maxRow, MAX_ROWS);
     for (let r = 1; r <= rows; r++) {
       const tr = el('tr', {}, el('th', {}, String(r)));
-      for (let c = 1; c <= maxCol; c++) {
+      for (let c = 1; c <= visibleCols; c++) {
         const td = el('td', {});
         const cell = byCell.get(`${r},${c}`);
         if (cell) renderRange(td, doc.text, cell.start, cell.end, decos);
@@ -164,6 +181,7 @@ function renderXlsx(container: HTMLElement, doc: LoadedDocument, decos: Decorati
     }
     host.append(el('div', { class: 'sheet-scroll', 'data-sheet': String(state.active) }, table));
     if (maxRow > MAX_ROWS) host.append(el('p', { class: 'muted small' }, `僅顯示前 ${MAX_ROWS} 列（共 ${maxRow} 列）；未顯示的列仍會被處理。`));
+    if (maxCol > MAX_COLS) host.append(el('p', { class: 'muted small' }, `僅顯示前 ${MAX_COLS} 欄（共 ${maxCol} 欄）；未顯示的欄仍會被處理。`));
   };
   sheets.forEach((s, i) => {
     tabs.append(el('button', { class: 'sheet-tab', type: 'button', onClick: () => { state.active = i; draw(); } }, `${s.name}（${s.cells.length}）`));

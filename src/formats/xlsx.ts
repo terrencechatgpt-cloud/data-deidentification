@@ -4,28 +4,35 @@ import { distributeEdits, type Segment } from './segments';
 import type { ParseProgress } from './index';
 
 const MAIN_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
-const XML_NS = 'http://www.w3.org/XML/1998/namespace';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 interface CellRef {
   sheetIdx: number;
-  /** Index into the sheet's cell list (document order); resolved on a fresh clone at generation time. */
+  /** Index into the sheet's detectable cell list (document order). */
   cellIdx: number;
 }
 
 interface SheetInfo {
   path: string;
-  doc: Document;
+  /** The original worksheet XML, retained so generation can rewrite only changed cells. */
+  xml: string;
+  /** Every cell in document order, including formulas and cells that are not detectable. */
+  allCells: CellInfo[];
+  /** Text cells plus labelled financial numeric cells, in document order. */
+  detectableCells: CellInfo[];
 }
 
 interface CellInfo {
-  element: Element;
+  start: number;
+  end: number;
+  type: string | null;
   formula: boolean;
   string: boolean;
   numeric: boolean;
   text: string;
   row: number;
   col: number;
+  sharedIndex: number | null;
 }
 
 export interface XlsxHandle {
@@ -44,6 +51,9 @@ function isMain(el: Element, local: string): boolean {
 }
 
 function textOf(el: Element): string {
+  // Most Excel strings are a simple <si><t>…</t></si> or <is><t>…</t></is>. Avoid a
+  // recursive DOM walk for that common case; only walk when phonetic hints must be excluded.
+  if (!Array.from(el.children).some((child) => isMain(child, 'rPh'))) return el.textContent ?? '';
   // Concatenates every <t> under a <si>/<is>, covering rich-text runs (<r><t>).
   let out = '';
   const walk = (n: Element) => {
@@ -58,19 +68,82 @@ function textOf(el: Element): string {
   return out;
 }
 
+function decodeXmlText(value: string): string {
+  if (!value.includes('&')) return value;
+  return value
+    .replace(/&#x([0-9a-f]+);/giu, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, decimal: string) => String.fromCodePoint(Number.parseInt(decimal, 10)))
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/** Extracts visible text from one <si> while ignoring phonetic hints and preserving rich text runs. */
+function visibleSharedString(body: string): string {
+  let out = '';
+  let searchFrom = 0;
+  while (searchFrom < body.length) {
+    const start = body.indexOf('<t', searchFrom);
+    if (start < 0) break;
+    const marker = body[start + 2];
+    if (marker !== undefined && !/[\s/>]/.test(marker)) {
+      searchFrom = start + 2;
+      continue;
+    }
+    const openEnd = body.indexOf('>', start + 2);
+    if (openEnd < 0) break;
+    const close = body.indexOf('</t', openEnd + 1);
+    if (close < 0) break;
+    const phoneticStart = body.lastIndexOf('<rPh', start);
+    const phoneticEnd = body.lastIndexOf('</rPh', start);
+    if (phoneticStart <= phoneticEnd) out += decodeXmlText(body.slice(openEnd + 1, close));
+    searchFrom = close + 4;
+  }
+  return out;
+}
+
+/** Reads shared strings in one linear pass; DOM parsing every <si> is prohibitively slow for large workbooks. */
+function parseSharedStringsXml(xml: string): string[] | null {
+  const values: string[] = [];
+  let searchFrom = 0;
+  while (searchFrom < xml.length) {
+    const start = xml.indexOf('<si', searchFrom);
+    if (start < 0) break;
+    const marker = xml[start + 3];
+    if (marker !== undefined && !/[\s/>]/.test(marker)) {
+      searchFrom = start + 3;
+      continue;
+    }
+    const openEnd = xml.indexOf('>', start + 3);
+    if (openEnd < 0) return null;
+    const close = xml.indexOf('</si', openEnd + 1);
+    if (close < 0) return null;
+    values.push(visibleSharedString(xml.slice(openEnd + 1, close)));
+    const closeEnd = xml.indexOf('>', close + 4);
+    searchFrom = closeEnd < 0 ? xml.length : closeEnd + 1;
+  }
+  return values.length > 0 ? values : null;
+}
+
 function parseXml(xml: string, path: string): Document {
   const doc = new DOMParser().parseFromString(xml, 'application/xml');
   if (doc.getElementsByTagName('parsererror').length > 0) throw new Error(`無法解析 ${path}`);
   return doc;
 }
 
-async function loadSharedStrings(zip: JSZip): Promise<string[]> {
+async function loadSharedStrings(zip: JSZip): Promise<{ values: string[]; xml: string | null }> {
   const file = zip.file('xl/sharedStrings.xml');
-  if (!file) return [];
-  const doc = parseXml(await file.async('string'), 'xl/sharedStrings.xml');
-  return Array.from(doc.documentElement.children)
-    .filter((si) => isMain(si, 'si'))
-    .map(textOf);
+  if (!file) return { values: [], xml: null };
+  const xml = await file.async('string');
+  const values = parseSharedStringsXml(xml);
+  if (values !== null) return { values, xml };
+  const doc = parseXml(xml, 'xl/sharedStrings.xml');
+  return {
+    values: Array.from(doc.documentElement.children).filter((si) => isMain(si, 'si')).map(textOf),
+    xml,
+  };
 }
 
 function cellCoords(ref: string): { row: number; col: number } {
@@ -140,54 +213,121 @@ function isFinancialNumericCell(c: CellInfo, labels: FinancialLabelIndex): boole
   return labels.labelRows.has(c.row) || (labels.earliestLabelRowByCol.get(c.col) ?? Number.POSITIVE_INFINITY) < c.row;
 }
 
-async function inspectCells(
-  doc: Document,
+function xmlAttributeValue(tag: string, name: string): string | null {
+  let cursor = 1;
+  while (cursor < tag.length && !/[\s/>]/.test(tag[cursor])) cursor += 1;
+  while (cursor < tag.length) {
+    while (cursor < tag.length && /\s/.test(tag[cursor])) cursor += 1;
+    if (cursor >= tag.length || tag[cursor] === '>' || tag[cursor] === '/') return null;
+    const nameStart = cursor;
+    while (cursor < tag.length && !/[\s=/>]/.test(tag[cursor])) cursor += 1;
+    const attributeName = tag.slice(nameStart, cursor);
+    while (cursor < tag.length && /\s/.test(tag[cursor])) cursor += 1;
+    if (tag[cursor] !== '=') {
+      while (cursor < tag.length && tag[cursor] !== '>' && tag[cursor] !== '/') cursor += 1;
+      continue;
+    }
+    cursor += 1;
+    while (cursor < tag.length && /\s/.test(tag[cursor])) cursor += 1;
+    const quote = tag[cursor];
+    if (quote !== '"' && quote !== "'") continue;
+    cursor += 1;
+    const valueStart = cursor;
+    const valueEnd = tag.indexOf(quote, valueStart);
+    if (valueEnd < 0) return null;
+    if (attributeName === name) return decodeXmlText(tag.slice(valueStart, valueEnd));
+    cursor = valueEnd + 1;
+  }
+  return null;
+}
+
+function findXmlTag(source: string, name: string, from: number): number {
+  let cursor = from;
+  while (cursor < source.length) {
+    const start = source.indexOf(`<${name}`, cursor);
+    if (start < 0) return -1;
+    const marker = source[start + name.length + 1];
+    if (marker === undefined || /[\s/>]/.test(marker)) return start;
+    cursor = start + name.length + 1;
+  }
+  return -1;
+}
+
+function xmlChild(source: string, name: string): { present: boolean; value: string } {
+  const start = findXmlTag(source, name, 0);
+  if (start < 0) return { present: false, value: '' };
+  const openEnd = source.indexOf('>', start + name.length + 1);
+  if (openEnd < 0) return { present: false, value: '' };
+  if (/\/\s*>$/.test(source.slice(start, openEnd + 1))) return { present: true, value: '' };
+  const close = source.indexOf(`</${name}`, openEnd + 1);
+  if (close < 0) return { present: false, value: '' };
+  // Keep the child XML raw. Inline strings may contain escaped text that looks like XML after
+  // decoding (for example the literal text "</t>"); visibleSharedString decodes each text node
+  // only after locating its real closing tag.
+  return { present: true, value: source.slice(openEnd + 1, close) };
+}
+
+/** Reads worksheet cells in one linear pass without constructing a DOM for the whole sheet. */
+async function scanWorksheetCells(
+  xml: string,
   shared: string[],
   onProgress?: (progress: number) => void,
 ): Promise<CellInfo[]> {
-  const domCells = doc.getElementsByTagNameNS(MAIN_NS, 'c');
   const cells: CellInfo[] = [];
-  for (let index = 0; index < domCells.length; index += 1) {
-    const element = domCells[index];
-    const type = element.getAttribute('t');
-    let formula = false;
-    let value: Element | undefined;
-    let inline: Element | undefined;
-    for (const child of Array.from(element.children)) {
-      if (isMain(child, 'f')) formula = true;
-      else if (isMain(child, 'v')) value = child;
-      else if (isMain(child, 'is')) inline = child;
+  let searchFrom = 0;
+  while (searchFrom < xml.length) {
+    const start = findXmlTag(xml, 'c', searchFrom);
+    if (start < 0) break;
+    const openEnd = xml.indexOf('>', start + 2);
+    if (openEnd < 0) throw new Error('無法解析工作表儲存格');
+    const openTag = xml.slice(start, openEnd + 1);
+    const selfClosing = /\/\s*>$/.test(openTag);
+    let end = openEnd + 1;
+    let body = '';
+    if (!selfClosing) {
+      const close = xml.indexOf('</c', end);
+      const closeEnd = close < 0 ? -1 : xml.indexOf('>', close + 3);
+      if (close < 0 || closeEnd < 0) throw new Error('無法解析工作表儲存格');
+      body = xml.slice(end, close);
+      end = closeEnd + 1;
     }
+
+    const type = xmlAttributeValue(openTag, 't');
+    const ref = xmlAttributeValue(openTag, 'r') ?? '';
+    const formula = xmlChild(body, 'f').present;
+    const value = xmlChild(body, 'v');
+    const inline = xmlChild(body, 'is');
     const string = type === 's' || type === 'inlineStr';
-    const numeric = (type === null || type === 'n') && value !== undefined;
-    const coords = string || numeric ? cellCoords(element.getAttribute('r') ?? '') : { row: 0, col: 0 };
+    const numeric = (type === null || type === 'n') && value.present;
+    const coords = string || numeric ? cellCoords(ref) : { row: 0, col: 0 };
     let text = '';
+    let sharedIndex: number | null = null;
     if (!formula) {
       if (type === 's') {
-        const idx = Number(value?.textContent ?? '');
-        text = Number.isInteger(idx) ? (shared[idx] ?? '') : '';
+        const idx = Number(value.value);
+        if (Number.isInteger(idx)) {
+          sharedIndex = idx;
+          text = shared[idx] ?? '';
+        }
       } else if (type === 'inlineStr') {
-        text = inline ? textOf(inline) : '';
+        text = visibleSharedString(inline.value);
       } else if (numeric) {
-        text = value?.textContent ?? '';
+        text = value.value;
       }
     }
-    cells.push({ element, formula, string, numeric, text, ...coords });
-    if (onProgress && (index === domCells.length - 1 || (index + 1) % 500 === 0)) {
-      onProgress(domCells.length === 0 ? 1 : 0.5 + ((index + 1) / domCells.length) * 0.5);
+    cells.push({ start, end, type, formula, string, numeric, text, sharedIndex, ...coords });
+    searchFrom = end;
+    if (onProgress && (cells.length === 1 || cells.length % 500 === 0 || searchFrom >= xml.length)) {
+      onProgress(xml.length === 0 ? 1 : searchFrom / xml.length);
       await yieldToBrowser();
     }
   }
+  onProgress?.(1);
   return cells;
 }
 
 /** Detectable value cells in document order: text cells and labelled, non-formula numeric cells. */
-async function textCells(
-  doc: Document,
-  shared: string[],
-  onProgress?: (progress: number) => void,
-): Promise<CellInfo[]> {
-  const cells = await inspectCells(doc, shared, onProgress);
+function textCells(cells: CellInfo[]): CellInfo[] {
   const labels = buildFinancialLabelIndex(cells);
   return cells.filter((c) => !c.formula && (c.string || isFinancialNumericCell(c, labels)));
 }
@@ -201,7 +341,8 @@ export async function parseXlsx(file: File, onProgress?: (progress: ParseProgres
   onProgress?.({ stage: 'xlsx-read', sheet: 0, totalSheets: 0, progress: 0.08 });
   const paths = await sheetPaths(zip);
   if (paths.length === 0) throw new Error('不是有效的 Excel (.xlsx) 檔案');
-  const shared = await loadSharedStrings(zip);
+  const sharedTable = await loadSharedStrings(zip);
+  const shared = sharedTable.values;
   onProgress?.({ stage: 'xlsx-read', sheet: 0, totalSheets: paths.length, progress: 0.18 });
 
   const sheets: SheetInfo[] = [];
@@ -223,13 +364,11 @@ export async function parseXlsx(file: File, onProgress?: (progress: ParseProgres
     reportSheetProgress(0);
     await yieldToBrowser();
     const xml = await zip.file(path)!.async('string');
-    const doc = parseXml(xml, path);
-    reportSheetProgress(0.04);
-    await yieldToBrowser();
-    sheets.push({ path, doc });
     const layoutCells: XlsxCellLayout[] = [];
     let lastRow = '';
-    const detectedCells = await textCells(doc, shared, (progress) => reportSheetProgress(progress * 0.6));
+    const allCells = await scanWorksheetCells(xml, shared, (progress) => reportSheetProgress(0.04 + progress * 0.56));
+    const detectedCells = textCells(allCells);
+    sheets.push({ path, xml, allCells, detectableCells: detectedCells });
     for (const [cellIdx, cell] of detectedCells.entries()) {
       const t = cell.text;
       if (t.length > 0) {
@@ -253,42 +392,45 @@ export async function parseXlsx(file: File, onProgress?: (progress: ParseProgres
     text += '\n';
   }
 
-  const sharedStringsXml = (await zip.file('xl/sharedStrings.xml')?.async('string')) ?? null;
+  const sharedStringsXml = sharedTable.xml;
   const handle: XlsxHandle = { zip, sheets, sharedStrings: shared, financialRanges, sharedStringsXml, segments, cells };
   return { fileName: file.name, format: 'xlsx', text, handle, layout: { kind: 'xlsx', sheets: layoutSheets } };
 }
 
-function setInlineString(c: Element, value: string): void {
-  const doc = c.ownerDocument;
-  for (const child of Array.from(c.children)) {
-    if (isMain(child, 'v') || isMain(child, 'is') || isMain(child, 'f')) c.removeChild(child);
-  }
-  c.setAttribute('t', 'inlineStr');
-  const is = doc.createElementNS(MAIN_NS, 'is');
-  const t = doc.createElementNS(MAIN_NS, 't');
-  t.setAttributeNS(XML_NS, 'xml:space', 'preserve');
-  t.textContent = value;
-  is.append(t);
-  c.append(is);
+function escapeXmlText(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function serialize(doc: Document): string {
-  const xml = new XMLSerializer().serializeToString(doc);
-  return xml.startsWith('<?xml') ? xml : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${xml}`;
+function rewriteCellXml(cellXml: string, value: string): string {
+  const openEnd = cellXml.indexOf('>');
+  if (openEnd < 0) return cellXml;
+  let openTag = cellXml.slice(0, openEnd + 1).replace(/\/\s*>$/, '>');
+  const typeAttribute = /\s+t\s*=\s*(["'])[^"']*\1/i;
+  if (typeAttribute.test(openTag)) openTag = openTag.replace(typeAttribute, ' t="inlineStr"');
+  else openTag = `${openTag.slice(0, -1)} t="inlineStr">`;
+  return `${openTag}<is><t xml:space="preserve">${escapeXmlText(value)}</t></is></c>`;
 }
 
 /** Empties every <si> that no cell references any more, so redacted values cannot linger in the archive. */
 function scrubSharedStrings(xml: string, referenced: Set<number>): string {
-  const doc = parseXml(xml, 'xl/sharedStrings.xml');
-  Array.from(doc.documentElement.children)
-    .filter((si) => isMain(si, 'si'))
-    .forEach((si, idx) => {
-      if (referenced.has(idx)) return;
-      while (si.firstChild) si.removeChild(si.firstChild);
-      const t = doc.createElementNS(MAIN_NS, 't');
-      si.append(t);
-    });
-  return serialize(doc);
+  let out = '';
+  let searchFrom = 0;
+  let index = 0;
+  while (searchFrom < xml.length) {
+    const start = findXmlTag(xml, 'si', searchFrom);
+    if (start < 0) return index === 0 ? xml : out + xml.slice(searchFrom);
+    const openEnd = xml.indexOf('>', start + 3);
+    if (openEnd < 0) return xml;
+    const close = xml.indexOf('</si', openEnd + 1);
+    const closeEnd = close < 0 ? -1 : xml.indexOf('>', close + 4);
+    if (close < 0 || closeEnd < 0) return xml;
+    out += xml.slice(searchFrom, start);
+    if (referenced.has(index)) out += xml.slice(start, closeEnd + 1);
+    else out += `${xml.slice(start, openEnd + 1)}<t></t>${xml.slice(close, closeEnd + 1)}`;
+    index += 1;
+    searchFrom = closeEnd + 1;
+  }
+  return index === 0 ? xml : out;
 }
 
 /**
@@ -310,18 +452,31 @@ export async function generateXlsx(doc: LoadedDocument, edits: TextEdit[]): Prom
 
   const referenced = new Set<number>();
   for (const [sheetIdx, sheet] of handle.sheets.entries()) {
-    const clone = sheet.doc.cloneNode(true) as Document;
     const cellChanges = perSheet.get(sheetIdx);
+    let sheetXml = sheet.xml;
+    const changedStarts = new Set<number>();
     if (cellChanges) {
-      const cells = await textCells(clone, handle.sharedStrings);
-      for (const [cellIdx, value] of cellChanges) setInlineString(cells[cellIdx].element, value);
+      const replacements = Array.from(cellChanges.entries())
+        .map(([cellIdx, value]) => {
+          const cell = sheet.detectableCells[cellIdx];
+          if (!cell) return null;
+          changedStarts.add(cell.start);
+          return { start: cell.start, end: cell.end, value };
+        })
+        .filter((replacement): replacement is { start: number; end: number; value: string } => replacement !== null)
+        .sort((a, b) => b.start - a.start);
+      for (const replacement of replacements) {
+        sheetXml = `${sheetXml.slice(0, replacement.start)}${rewriteCellXml(
+          sheetXml.slice(replacement.start, replacement.end),
+          replacement.value,
+        )}${sheetXml.slice(replacement.end)}`;
+      }
     }
-    for (const c of Array.from(clone.getElementsByTagNameNS(MAIN_NS, 'c'))) {
-      if (c.getAttribute('t') !== 's') continue;
-      const idx = Number(c.getElementsByTagNameNS(MAIN_NS, 'v')[0]?.textContent ?? '');
-      if (Number.isInteger(idx)) referenced.add(idx);
+    for (const cell of sheet.allCells) {
+      if (cell.type !== 's' || cell.sharedIndex === null || changedStarts.has(cell.start)) continue;
+      referenced.add(cell.sharedIndex);
     }
-    handle.zip.file(sheet.path, serialize(clone));
+    if (sheetXml !== sheet.xml) handle.zip.file(sheet.path, sheetXml);
   }
   if (handle.sharedStringsXml !== null) {
     handle.zip.file('xl/sharedStrings.xml', scrubSharedStrings(handle.sharedStringsXml, referenced));

@@ -22,12 +22,42 @@ export function compilePattern(p: Pattern): RegExp | null {
 
 /** Longest match wins; on equal length, the earlier start wins. */
 function resolveOverlaps(cands: Candidate[]): Candidate[] {
+  if (cands.length === 0) return [];
   const sorted = [...cands].sort((a, b) => b.end - b.start - (a.end - a.start) || a.start - b.start);
   const chosen: Candidate[] = [];
+  // Chosen ranges are usually short identifiers, dates, or amounts. A byte per UTF-16 code
+  // unit makes overlap checks proportional to the candidate length instead of rescanning every
+  // previously accepted item (which became quadratic on large Excel files).
+  let maxEnd = 0;
+  for (const candidate of cands) maxEnd = Math.max(maxEnd, candidate.end);
+  const occupied = new Uint8Array(maxEnd);
   for (const c of sorted) {
-    if (chosen.every((k) => c.end <= k.start || c.start >= k.end)) chosen.push(c);
+    let overlaps = false;
+    for (let index = c.start; index < c.end; index += 1) {
+      if (occupied[index]) {
+        overlaps = true;
+        break;
+      }
+    }
+    if (overlaps) continue;
+    for (let index = c.start; index < c.end; index += 1) occupied[index] = 1;
+    chosen.push(c);
   }
   return chosen.sort((a, b) => a.start - b.start);
+}
+
+function toRedactionItem(candidate: Candidate, text: string, book: CodeBook): RedactionItem {
+  const original = text.slice(candidate.start, candidate.end);
+  return {
+    id: newId(),
+    category: candidate.category,
+    original,
+    start: candidate.start,
+    end: candidate.end,
+    code: book.codeFor(candidate.category, original),
+    origin: 'auto' as const,
+    active: true,
+  };
 }
 
 export function detect(text: string, patterns: Pattern[], book: CodeBook = new CodeBook()): RedactionItem[] {
@@ -48,19 +78,7 @@ export function detect(text: string, patterns: Pattern[], book: CodeBook = new C
       cands.push({ category: p.category, start: m.index, end: m.index + m[0].length });
     }
   }
-  return resolveOverlaps(cands).map((c) => {
-    const original = text.slice(c.start, c.end);
-    return {
-      id: newId(),
-      category: c.category,
-      original,
-      start: c.start,
-      end: c.end,
-      code: book.codeFor(c.category, original),
-      origin: 'auto' as const,
-      active: true,
-    };
-  });
+  return resolveOverlaps(cands).map((candidate) => toRedactionItem(candidate, text, book));
 }
 
 /**
@@ -76,14 +94,27 @@ export function detectDocument(doc: LoadedDocument, patterns: Pattern[], book: C
   const ranges = (doc.handle as { financialRanges?: { start: number; end: number }[] }).financialRanges ?? [];
   if (!amountPattern || ranges.length === 0) return items;
 
-  const rangePattern: Pattern = { ...amountPattern, validate: undefined };
+  // Numeric amount ranges already carry their financial-column context from the workbook
+  // structure, so scan them with one compiled regex. Calling detect() per range used to
+  // recompile the regex and linearly rescan the growing item list for every cell.
+  const rangeRegex = compilePattern(amountPattern);
+  if (!rangeRegex) return items;
+  const existing = new Set(items.map((item) => `${item.start}:${item.end}`));
   for (const range of ranges) {
-    const localItems = detect(doc.text.slice(range.start, range.end), [rangePattern], book);
-    for (const item of localItems) {
-      const start = item.start + range.start;
-      const end = item.end + range.start;
-      if (items.some((existing) => existing.start === start && existing.end === end)) continue;
-      items.push({ ...item, start, end });
+    const localText = doc.text.slice(range.start, range.end);
+    rangeRegex.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = rangeRegex.exec(localText)) !== null) {
+      if (match[0].length === 0) {
+        rangeRegex.lastIndex++;
+        continue;
+      }
+      const start = match.index + range.start;
+      const end = start + match[0].length;
+      const key = `${start}:${end}`;
+      if (existing.has(key)) continue;
+      items.push(toRedactionItem({ category: amountPattern.category, start, end }, doc.text, book));
+      existing.add(key);
     }
   }
   return items.sort((a, b) => a.start - b.start);
