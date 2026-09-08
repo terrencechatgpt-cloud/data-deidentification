@@ -118,23 +118,38 @@ function hasFinancialLabel(text: string): boolean {
   return FINANCIAL_HEADER.test(text);
 }
 
-function isFinancialNumericCell(c: Element, doc: Document, shared: string[]): boolean {
+interface FinancialLabelIndex {
+  /** Rows containing a financial label, for same-row numeric values. */
+  labelRows: Set<number>;
+  /** Earliest financial label row in each column, for labels above numeric values. */
+  earliestLabelRowByCol: Map<number, number>;
+}
+
+/** Builds the financial context once per worksheet instead of rescanning every cell for every number. */
+function buildFinancialLabelIndex(doc: Document, shared: string[]): FinancialLabelIndex {
+  const labelRows = new Set<number>();
+  const earliestLabelRowByCol = new Map<number, number>();
+  for (const candidate of Array.from(doc.getElementsByTagNameNS(MAIN_NS, 'c'))) {
+    if (isFormula(candidate) || !isStringCell(candidate) || !hasFinancialLabel(cellText(candidate, shared))) continue;
+    const { row, col } = cellCoords(candidate.getAttribute('r') ?? '');
+    labelRows.add(row);
+    const existing = earliestLabelRowByCol.get(col);
+    if (existing === undefined || row < existing) earliestLabelRowByCol.set(col, row);
+  }
+  return { labelRows, earliestLabelRowByCol };
+}
+
+function isFinancialNumericCell(c: Element, labels: FinancialLabelIndex): boolean {
   if (!isNumericCell(c) || isFormula(c)) return false;
   const target = cellCoords(c.getAttribute('r') ?? '');
-  return Array.from(doc.getElementsByTagNameNS(MAIN_NS, 'c'))
-    .filter((candidate) => !isFormula(candidate) && isStringCell(candidate))
-    .some((candidate) => {
-      const candidateCoords = cellCoords(candidate.getAttribute('r') ?? '');
-      const sameRow = candidateCoords.row === target.row;
-      const nearbyHeader = candidateCoords.col === target.col && candidateCoords.row < target.row;
-      return (sameRow || nearbyHeader) && hasFinancialLabel(cellText(candidate, shared));
-    });
+  return labels.labelRows.has(target.row) || (labels.earliestLabelRowByCol.get(target.col) ?? Number.POSITIVE_INFINITY) < target.row;
 }
 
 /** Detectable value cells in document order: text cells and labelled, non-formula numeric cells. */
 function textCells(doc: Document, shared: string[]): Element[] {
+  const labels = buildFinancialLabelIndex(doc, shared);
   return Array.from(doc.getElementsByTagNameNS(MAIN_NS, 'c')).filter(
-    (c) => !isFormula(c) && (isStringCell(c) || isFinancialNumericCell(c, doc, shared)),
+    (c) => !isFormula(c) && (isStringCell(c) || isFinancialNumericCell(c, labels)),
   );
 }
 

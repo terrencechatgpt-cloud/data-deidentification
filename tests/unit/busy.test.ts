@@ -53,4 +53,21 @@ describe('withBusy', () => {
     await run;
     expect(app.hasAttribute('inert')).toBe(false);
   });
+
+  it('uses an indeterminate bar while a phase has no internal progress', async () => {
+    let finish!: () => void;
+    const run = withBusy('讀取檔案中…', async ({ update }) => {
+      update({ current: 0, total: 2, indeterminate: true, detail: '正在解壓縮 Excel 檔案' });
+      await new Promise<void>((resolve) => { finish = resolve; });
+    }, { estimatedMs: 3000 });
+
+    await tick(200);
+    const overlay = document.querySelector<HTMLElement>('.busy-overlay')!;
+    expect(overlay.querySelector('.busy-progress')?.classList.contains('busy-progress-indeterminate')).toBe(true);
+    expect(overlay.querySelector('.busy-progress-text')?.textContent).toContain('處理中');
+    expect(overlay.querySelector('.busy-eta')?.textContent).toContain('預估剩餘');
+
+    finish();
+    await run;
+  });
 });

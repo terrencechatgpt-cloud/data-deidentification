@@ -55,6 +55,8 @@ export interface BusyProgress {
   total: number;
   /** Human-readable detail shown under the progress bar. */
   detail?: string;
+  /** Used while a parser is working inside a phase whose internal progress is unavailable. */
+  indeterminate?: boolean;
 }
 
 export interface BusyReporter {
@@ -102,15 +104,26 @@ function renderBusyState(): void {
   const current = Math.max(0, Math.min(p.current, p.total));
   const percent = Math.round((current / p.total) * 100);
   const elapsed = Date.now() - busyState.startedAt;
-  fill.style.width = `${percent}%`;
-  progress.setAttribute('aria-valuenow', String(percent));
+  const indeterminate = p.indeterminate === true;
+  progress.classList.toggle('busy-progress-indeterminate', indeterminate);
+  if (indeterminate) {
+    fill.style.width = '38%';
+    progress.removeAttribute('aria-valuenow');
+    progress.setAttribute('aria-valuetext', p.detail ?? '處理中');
+  } else {
+    fill.style.width = `${percent}%`;
+    progress.setAttribute('aria-valuenow', String(percent));
+    progress.removeAttribute('aria-valuetext');
+  }
   progress.hidden = false;
-  progressText.textContent = p.detail ? `${percent}% · ${p.detail}` : `${percent}%`;
+  progressText.textContent = indeterminate
+    ? `處理中 · ${p.detail ?? '請稍候'}`
+    : p.detail ? `${percent}% · ${p.detail}` : `${percent}%`;
 
-  if (current >= p.total) {
+  if (!indeterminate && current >= p.total) {
     eta.textContent = '即將完成';
   } else {
-    const measuredRemaining = current > 0 && elapsed > 0 ? (elapsed / current) * (p.total - current) : undefined;
+    const measuredRemaining = !indeterminate && current > 0 && elapsed > 0 ? (elapsed / current) * (p.total - current) : undefined;
     const remaining = measuredRemaining ?? (busyState.estimatedMs === undefined ? undefined : busyState.estimatedMs - elapsed);
     eta.textContent = remaining === undefined
       ? '正在估算剩餘時間…'

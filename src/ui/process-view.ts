@@ -134,7 +134,8 @@ async function importFiles(files: File[], root: HTMLElement, reporter: BusyRepor
   const totalSteps = files.length * 2;
   reporter.update({ current: 0, total: totalSteps, detail: `準備處理 ${files.length} 個檔案` });
   for (const [index, file] of files.entries()) {
-    reporter.update({ current: index * 2, total: totalSteps, detail: `正在讀取第 ${index + 1} / ${files.length} 個檔案：${file.name}` });
+    reporter.update({ current: index * 2, total: totalSteps, indeterminate: true, detail: `正在讀取第 ${index + 1} / ${files.length} 個檔案：${file.name}` });
+    await yieldToBrowser();
     try {
       const doc = await parseDocument(file);
       reporter.update({ current: index * 2 + 1, total: totalSteps, detail: `正在偵測第 ${index + 1} / ${files.length} 個檔案：${file.name}` });

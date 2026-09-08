@@ -346,10 +346,12 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .busy-progress { height: 0.45rem; margin-top: 0.7rem; overflow: hidden; border-radius: 999px; background: #e5e8ed; }
 .busy-progress[hidden] { display: none; }
 .busy-progress-fill { height: 100%; width: 0; border-radius: inherit; background: var(--primary); transition: width 180ms ease-out; }
+.busy-progress-indeterminate .busy-progress-fill { animation: busy-progress-slide 1.15s ease-in-out infinite; }
 .busy-meta { display: flex; justify-content: space-between; gap: 0.75rem; margin-top: 0.45rem; color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
 .busy-progress-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .busy-eta { flex-shrink: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes busy-progress-slide { 0% { transform: translateX(-115%); } 55% { transform: translateX(80%); } 100% { transform: translateX(220%); } }
 #app[inert] .btn, #app[inert] .tab, #app[inert] .dropzone { opacity: 0.55; }
 
 /* Static about / how-to / FAQ block (index.html #site-info): plain page content without JS, shown in a dialog once the app mounts. */
