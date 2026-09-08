@@ -11,7 +11,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
 const FONT_URL = `${import.meta.env.BASE_URL}fonts/NotoSansTC-Regular.ttf`;
 
-interface PdfTextItem {
+export interface PdfTextItem {
   text: string;
   x: number;
   y: number;
@@ -19,7 +19,7 @@ interface PdfTextItem {
   width: number;
 }
 
-interface PdfPage {
+export interface PdfPage {
   width: number;
   height: number;
   items: PdfTextItem[];
@@ -32,6 +32,30 @@ export interface PdfHandle {
   /** segments[i] belongs to pages[itemPage[i]].items[itemIndex[i]] */
   itemPage: number[];
   itemIndex: number[];
+}
+
+export function buildPdfDocument(
+  fileName: string,
+  text: string,
+  pages: PdfPage[],
+  segments: Segment[],
+  itemPage: number[],
+  itemIndex: number[],
+): LoadedDocument {
+  const handle: PdfHandle = { pages, segments, itemPage, itemIndex };
+  const layoutPages = pages.map((pg) => ({ width: pg.width, height: pg.height, items: [] as PdfItemLayout[] }));
+  segments.forEach((segment, i) => {
+    const item = pages[itemPage[i]].items[itemIndex[i]];
+    layoutPages[itemPage[i]].items.push({
+      start: segment.start,
+      end: segment.end,
+      x: item.x,
+      y: item.y,
+      fontSize: item.fontSize,
+      width: item.width,
+    });
+  });
+  return { fileName, format: 'pdf', text, handle, layout: { kind: 'pdf', pages: layoutPages } };
 }
 
 function fontSizeOf(item: TextItem): number {
@@ -94,15 +118,9 @@ export async function parsePdf(file: File): Promise<LoadedDocument> {
   await task.destroy();
 
   if (text.trim().length === 0) {
-    throw new Error('此 PDF 沒有可擷取的文字層（可能是掃描影像），無法處理');
+    throw Object.assign(new Error('此 PDF 沒有可擷取的文字層（可能是掃描影像），無法處理'), { code: 'PDF_NO_TEXT_LAYER' });
   }
-  const handle: PdfHandle = { pages, segments, itemPage, itemIndex };
-  const layoutPages = pages.map((pg) => ({ width: pg.width, height: pg.height, items: [] as PdfItemLayout[] }));
-  segments.forEach((seg, i) => {
-    const it = pages[itemPage[i]].items[itemIndex[i]];
-    layoutPages[itemPage[i]].items.push({ start: seg.start, end: seg.end, x: it.x, y: it.y, fontSize: it.fontSize, width: it.width });
-  });
-  return { fileName: file.name, format: 'pdf', text, handle, layout: { kind: 'pdf', pages: layoutPages } };
+  return buildPdfDocument(file.name, text, pages, segments, itemPage, itemIndex);
 }
 
 let fontBytesPromise: Promise<ArrayBuffer> | null = null;

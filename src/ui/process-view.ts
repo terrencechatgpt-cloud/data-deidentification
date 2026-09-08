@@ -6,8 +6,8 @@ import { CodeBook, buildMarker, parseMarkers } from '../core/codes';
 import { maskDisplay } from '../core/mask';
 import { serializeMapping } from '../core/csv';
 import { getEffectivePatterns } from '../core/pattern-store';
-import { ACCEPT_ATTR, formatLimitations, generateDocument, mappingFileName, outputFileName, parseDocument } from '../formats';
-import { button, clear, downloadBlob, dropZone, el, toast, type BusyReporter, withBusy } from './components';
+import { ACCEPT_ATTR, formatLimitations, generateDocument, mappingFileName, outputFileName, parseDocument, type ParseProgress } from '../formats';
+import { button, clear, downloadBlob, dropZone, el, toast, type BusyProgress, type BusyReporter, withBusy } from './components';
 import { renderDocumentPreview, type Decoration } from './preview';
 import { buildArchive } from '../formats/batch';
 import { SAMPLES, samplesSection } from './samples';
@@ -108,7 +108,7 @@ function fileFormat(file: File): string {
 
 /** A deliberately conservative estimate; the measured rate replaces it after the first progress update. */
 function estimateFileMs(file: File): number {
-  const base = fileFormat(file) === 'pdf' ? 1400 : fileFormat(file) === 'xlsx' ? 900 : fileFormat(file) === 'docx' ? 850 : 350;
+  const base = fileFormat(file) === 'pdf' ? 4200 : fileFormat(file) === 'xlsx' ? 900 : fileFormat(file) === 'docx' ? 850 : 350;
   const sizeMs = Math.min(9000, (file.size / (1024 * 1024)) * 650);
   return base + sizeMs;
 }
@@ -120,6 +120,28 @@ function estimateImportMs(files: File[]): number {
 function estimateOutputMs(doc: LoadedDocument): number {
   const base = doc.format === 'pdf' ? 1800 : doc.format === 'xlsx' ? 900 : doc.format === 'docx' ? 750 : 350;
   return Math.max(900, base + Math.min(8000, (doc.text.length / 5000) * 400));
+}
+
+function busyProgressForParse(fileIndex: number, fileCount: number, totalSteps: number, progress: ParseProgress): BusyProgress {
+  const base = fileIndex * 2;
+  const value = Math.max(0, Math.min(1, progress.progress ?? 0));
+  if (progress.stage === 'ocr-model') {
+    return { current: base, total: totalSteps, indeterminate: true, detail: '正在準備瀏覽器內 OCR 引擎（首次使用會下載語言模型）' };
+  }
+  if (progress.stage === 'ocr-render') {
+    return {
+      current: base + 0.04 + value * 0.08,
+      total: totalSteps,
+      detail: `正在準備 OCR 第 ${progress.page} / ${progress.totalPages} 頁（檔案 ${fileIndex + 1} / ${fileCount}）`,
+    };
+  }
+  const pageFraction = progress.totalPages > 0 ? (Math.max(0, progress.page - 1) + value) / progress.totalPages : value;
+  return {
+    current: base + 0.12 + Math.min(0.84, pageFraction * 0.84),
+    total: totalSteps,
+    indeterminate: progress.progress === undefined,
+    detail: `正在 OCR 第 ${progress.page} / ${progress.totalPages} 頁（檔案 ${fileIndex + 1} / ${fileCount}）`,
+  };
 }
 
 async function importFiles(files: File[], root: HTMLElement, reporter: BusyReporter): Promise<void> {
@@ -137,7 +159,10 @@ async function importFiles(files: File[], root: HTMLElement, reporter: BusyRepor
     reporter.update({ current: index * 2, total: totalSteps, indeterminate: true, detail: `正在讀取第 ${index + 1} / ${files.length} 個檔案：${file.name}` });
     await yieldToBrowser();
     try {
-      const doc = await parseDocument(file);
+      const doc = await parseDocument(file, {
+        allowOcr: true,
+        onProgress: (progress) => reporter.update(busyProgressForParse(index, files.length, totalSteps, progress)),
+      });
       reporter.update({ current: index * 2 + 1, total: totalSteps, detail: `正在偵測第 ${index + 1} / ${files.length} 個檔案：${file.name}` });
       await yieldToBrowser();
       const book = new CodeBook();
@@ -197,7 +222,7 @@ function render(root: HTMLElement): void {
   if (state.docs.length === 0) {
     root.append(
       el('h2', {}, '藥廠文件去識別化'),
-      el('p', { class: 'muted' }, `適用於公文、合約、財務數據、供應商資料與臨床研究文件。支援 PDF（含文字層）、Word (.docx)、Excel (.xlsx)、TXT、Markdown；可一次選擇多個檔案（最多 ${MAX_FILES} 個、格式可混合），單檔 20 MB 以內。所有處理皆在瀏覽器內完成，文件不會離開你的電腦。`),
+      el('p', { class: 'muted' }, `適用於公文、合約、財務數據、供應商資料與臨床研究文件。支援 PDF（含文字層與掃描影像 OCR）、Word (.docx)、Excel (.xlsx)、TXT、Markdown；可一次選擇多個檔案（最多 ${MAX_FILES} 個、格式可混合），單檔 20 MB 以內。所有處理皆在瀏覽器內完成，文件不會離開你的電腦。`),
       renderSafetyCard(),
       dropZone({
         accept: ACCEPT_ATTR,
@@ -223,7 +248,7 @@ function renderSafetyCard(): HTMLElement {
     el('ul', {},
       el('li', {}, '自動偵測完成後，請逐頁／逐工作表覆核；漏抓內容可在預覽中圈選新增。'),
       el('li', {}, 'Excel 帶有財務欄位標籤的數值型金額會偵測；公式儲存格維持原樣，公式結果、註解、隱藏工作表與部分中繼資料仍不在目前範圍。'),
-      el('li', {}, '掃描型 PDF 沒有文字層時無法處理；請先 OCR，並確認 OCR 結果沒有錯字或漏字。'),
+      el('li', {}, '掃描型 PDF 沒有文字層時會在瀏覽器內以繁中／英文 OCR；首次使用需下載 OCR 語言模型，完成後請逐頁確認錯字、漏字與表格內容。'),
       el('li', {}, '財務金額、日期、試驗編號、批號與產品代碼可能影響業務判讀；下載前請依用途決定是否保留或替換。'),
       el('li', {}, 'CSV 編碼表可以還原原文，請視同原始機密文件保存與傳遞。'),
     ),

@@ -66,10 +66,10 @@
 ### Implementation for User Story 1
 
 - [X] T021 [P] [US1] 實作 `src/formats/docx.ts`：jszip 解壓 → DOMParser 解析 `word/document.xml` 與 `word/header*.xml`、`word/footer*.xml` → 走訪 `<w:t>` 建立全文與節點區段對照（段落間以 `\n` 分隔）→ `applyTextEdits(edits)` 支援跨節點取代（寫入首節點、清空其餘、保留 `xml:space="preserve"`）→ 序列化並重新壓縮輸出 Blob（依 research.md R3）
-- [X] T022 [P] [US1] 實作 `src/formats/pdf.ts` 解析端：pdfjs-dist（設定 worker URL）逐頁取得 `TextItem`（str、transform、width、height、fontSize），組合為全文（項目間依座標補空白/換行），保留每項目在全文的位移區間；全文為空 → 拋出「無文字層」錯誤（FR-004）
+- [X] T022 [P] [US1] 實作 `src/formats/pdf.ts` 解析端：pdfjs-dist（設定 worker URL）逐頁取得 `TextItem`（str、transform、width、height、fontSize），組合為全文（項目間依座標補空白/換行），保留每項目在全文的位移區間；全文為空 → 回傳可供 OCR fallback 辨識的「無文字層」錯誤（FR-004）
 - [X] T023 [US1] 實作 `src/formats/pdf.ts` 產出端：pdf-lib 建立同尺寸頁面、註冊 fontkit、內嵌 `/fonts/NotoSansTC-Regular.otf`（subset），依原座標繪回每個文字項目（被取代的項目繪製新文字），回傳 Blob（依 research.md R2）
 - [X] T024 [US1] 在 `src/formats/index.ts` 接上 docx 與 pdf 的 parse/generate，統一以「全文 + 編輯清單（start,end,replacement）」介面驅動各格式產出
-- [X] T025 [US1] 實作 `src/ui/process-view.ts` 上傳與偵測：檔案區→`parseDocument`→依啟用規則 `detect`→狀態存於 view；錯誤（格式/大小/無文字層）以 toast 顯示；無偵測結果時顯示「未偵測到敏感資訊」提示
+- [X] T025 [US1] 實作 `src/ui/process-view.ts` 上傳與偵測：檔案區→`parseDocument`（掃描 PDF fallback 到瀏覽器內 OCR）→依啟用規則 `detect`→狀態存於 view；錯誤（格式/大小/OCR 失敗）以 toast 顯示；無偵測結果時顯示「未偵測到敏感資訊」提示
 - [X] T026 [US1] 實作 `src/ui/process-view.ts` 預覽區：以文字節點＋`<mark class="mark-類別" data-id>` 渲染去識別化後全文（標記顯示 `[類別:code]`），右側清單列出每筆（類別/原文/編碼）
 - [X] T027 [US1] 實作 `src/ui/process-view.ts` 下載：「下載去識別化文件」呼叫 `applyRedactions` + `generateDocument`（檔名 `<name>.deid.<ext>`）；「下載編碼表」呼叫 `serializeMapping`（檔名 `<name>.mapping.csv`）；下載後解除 beforeunload 旗標；PDF 格式時顯示「版面重建、不含圖片」限制提示（FR-020）
 - [X] T028 [P] [US1] 建立測試樣本 `tests/fixtures/sample.txt`、`tests/fixtures/sample.md`（含姓名、身分證、手機、市話、地址、Email、重複出現的姓名），以及以程式產生的最小 `tests/fixtures/sample.docx`（含段落、表格、跨 run 拆散的身分證字號）
@@ -173,7 +173,7 @@
 - [X] T075 **(Sonnet)** 整合測試 `tests/integration/batch-archive.test.ts`：唯一命名、清單 CSV、ZIP 內容與每個檔案的 round-trip
 - [X] T071 互動調整（FR-014／FR-016 修訂）：點擊標記彈出確認視窗（取消／加回）；圖例改為「去識別化種類」並可點擊整批取消（刪除線）／復原，重新偵測後沿用；偵測清單預設收合可展開；下載與複製按鈕移至上方工具列
 
-- [X] T045 [P] 撰寫 `README.md`：功能、隱私聲明（純前端零上傳）、格式限制（PDF 版面重建/無 OCR/僅 .docx）、開發與部署指令、字型授權
+- [X] T045 [P] 撰寫 `README.md`：功能、隱私聲明（純前端零上傳）、格式限制（PDF 版面重建／掃描 PDF OCR／僅 .docx）、開發與部署指令、字型授權
 - [X] T046 [P] 在處理頁加入偵測到原文含標記樣式文字時的警告（spec Edge Case；掃描 `MARKER_REGEX` 於原文）
 - [X] T047 執行 `npm run build` 並確認 `dist/` 以 `npm run preview` 可正常運作、pdfjs worker 與字型資產路徑正確（相對路徑 `base: './'`）
 - [X] T048 **(Sonnet)** 依 `specs/001-doc-deidentify/quickstart.md` 情境 1–6 以瀏覽器做端對端驗證（含 DevTools Network 確認零文件內容請求，SC-005），將結果記錄於 `specs/001-doc-deidentify/checklists/e2e-validation.md`

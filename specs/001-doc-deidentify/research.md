@@ -19,6 +19,12 @@
   - 文字重建法保證輸出檔內完全不含原始敏感值，版面座標盡量貼近原件；圖片/圖形/字型無法保留，此限制已在 spec Assumptions 揭露並需在 UI 上揭露（FR-020）。
 - **Alternatives considered**: 白框覆蓋法（洩漏風險，否決）、content stream 編輯（複雜度過高，否決）、一律輸出純文字（使用者已明確選擇盡量保留格式，否決）。
 
+## R2b. 掃描影像 PDF OCR（2026-09-08 新增）
+
+- **Decision**: 文字層擷取為空時，以 `pdfjs-dist` 在瀏覽器內逐頁渲染到 Canvas，再以 `tesseract.js` 的 `chi_tra`＋`eng` 語言模型辨識；OCR 結果沿用 PDF 的全文位移與座標結構，最後仍由 R2 的文字重建管線輸出。
+- **Rationale**: `tesseract.js` 不直接解析 PDF，因此先由 PDF.js 渲染頁面；只把 OCR 文字與座標送入後續偵測，輸出不複製原始掃描影像，避免敏感影像仍藏在 PDF 底層。OCR 語言模型首次使用需下載，文件內容與 OCR 結果不送至伺服器。
+- **Limitations**: OCR 可能誤認或漏辨，尤其是低解析度、手寫、旋轉、表格與印章；介面必須顯示頁面進度並要求人工逐頁覆核。公司內網若封鎖模型資產來源，需先允許模型下載或改用已含文字層的 PDF。
+
 ## R3. Word (.docx) 解析與輸出
 
 - **Decision**: 把 .docx 當 ZIP 處理：`jszip` 解壓 → 以瀏覽器內建 `DOMParser` 解析 `word/document.xml`（含 `word/header*.xml`、`word/footer*.xml`）→ 走訪 `<w:t>` 文字節點建立「全文 ↔ 節點區段」對照 → 直接在 XML 文字節點上做跨節點取代 → `XMLSerializer` 序列化後重新壓回 ZIP。輸出即為 .docx。

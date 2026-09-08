@@ -12,7 +12,7 @@
 
 **Language/Version**: TypeScript 5.x（ES2022 target），瀏覽器執行
 
-**Primary Dependencies**: Vite 6（建置）、pdfjs-dist（PDF 文字＋座標擷取）、pdf-lib + @pdf-lib/fontkit（PDF 輸出、CJK 字型內嵌）、jszip（.docx ZIP 處理）、Noto Sans TC 字型資產；其餘（CSV、規則引擎、UI）自寫
+**Primary Dependencies**: Vite 6（建置）、pdfjs-dist（PDF 文字＋座標擷取與頁面渲染）、tesseract.js（瀏覽器內繁中／英文 OCR）、pdf-lib + @pdf-lib/fontkit（PDF 輸出、CJK 字型內嵌）、jszip（.docx ZIP 處理）、Noto Sans TC 字型資產；其餘（CSV、規則引擎、UI）自寫
 
 **Storage**: localStorage 僅存偵測規則設定；文件內容與對照表僅存在記憶體（constitution 限制）
 
@@ -24,7 +24,7 @@
 
 **Performance Goals**: 10 頁文件上傳→預覽 < 5 秒（SC-001）；取消/新增後預覽更新 < 1 秒（SC-007）
 
-**Constraints**: 檔案上限 20 MB；離線可用（除首次載入資產）；文件內容零網路請求（SC-005）；輸出 PDF 內不得殘留原始敏感文字
+**Constraints**: 檔案上限 20 MB；一般文件離線可用，掃描 OCR 首次需下載語言模型；文件內容零網路請求（SC-005）；輸出 PDF 內不得殘留原始敏感文字或原始掃描影像
 
 **Scale/Scope**: 單檔處理、3 個主要畫面（處理/規則管理/還原）、6 類內建規則＋自訂規則、5 個核心模組（formats、detector、codes、csv、ui）
 

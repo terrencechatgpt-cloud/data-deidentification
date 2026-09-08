@@ -2,6 +2,18 @@ import type { DocFormat, LoadedDocument, TextEdit } from '../core/types';
 import { MAX_FILE_BYTES } from '../core/types';
 import { generatePlainText, parsePlainText } from './plaintext';
 
+export interface ParseProgress {
+  stage: 'ocr-model' | 'ocr-render' | 'ocr-recognize';
+  page: number;
+  totalPages: number;
+  progress?: number;
+}
+
+export interface ParseDocumentOptions {
+  allowOcr?: boolean;
+  onProgress?: (progress: ParseProgress) => void;
+}
+
 export const SUPPORTED_EXTENSIONS: Record<string, DocFormat> = {
   txt: 'txt',
   md: 'md',
@@ -27,7 +39,7 @@ export function validateFile(file: File): DocFormat {
   return format;
 }
 
-export async function parseDocument(file: File): Promise<LoadedDocument> {
+export async function parseDocument(file: File, options: ParseDocumentOptions = {}): Promise<LoadedDocument> {
   const format = validateFile(file);
   switch (format) {
     case 'txt':
@@ -37,8 +49,15 @@ export async function parseDocument(file: File): Promise<LoadedDocument> {
       return (await import('./docx')).parseDocx(file);
     case 'xlsx':
       return (await import('./xlsx')).parseXlsx(file);
-    case 'pdf':
-      return (await import('./pdf')).parsePdf(file);
+    case 'pdf': {
+      try {
+        return await (await import('./pdf')).parsePdf(file);
+      } catch (error) {
+        const code = (error as Error & { code?: string }).code;
+        if (!options.allowOcr || code !== 'PDF_NO_TEXT_LAYER') throw error;
+        return (await import('./pdf-ocr')).parsePdfWithOcr(file, options.onProgress);
+      }
+    }
   }
 }
 
@@ -70,7 +89,7 @@ export function mappingFileName(original: string): string {
 
 export function formatLimitations(format: DocFormat): string | null {
   if (format === 'pdf') {
-    return 'PDF 輸出為文字版面重建：文字依原座標繪回，但圖片、圖形與原字型不會保留。掃描型 PDF 無法處理；請另行確認影像、附件與中繼資料。';
+    return 'PDF 文字層依原座標重建；掃描型 PDF 會先在瀏覽器內以繁中／英文 OCR，再重建文字版面。圖片、圖形、原字型與 OCR 可能誤認的內容不會保留，請逐頁校對並另行確認附件與中繼資料。';
   }
   if (format === 'xlsx') {
     return 'Excel 輸出保留儲存格樣式與工作表結構；帶有財務欄位語境的數值型金額也會處理。公式儲存格維持原樣，不會被偵測或改寫；公式結果、工作表名稱、註解、隱藏內容與部分中繼資料不在偵測範圍，其他無標籤數值不會直接遮罩。';

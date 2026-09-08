@@ -116,12 +116,12 @@
             {
               "@type": "Question",
               "name": "我的檔案會被上傳到伺服器嗎？",
-              "acceptedAnswer": { "@type": "Answer", "text": "不會。文件解析、個資偵測、遮罩與輸出全部在你的瀏覽器內以 JavaScript 完成，沒有任何後端；載入頁面後即使離線也能使用。瀏覽器只會儲存你的偵測規則設定，文件內容與編碼表都不會落地。" }
+              "acceptedAnswer": { "@type": "Answer", "text": "不會。文件解析、個資偵測、遮罩與輸出全部在你的瀏覽器內以 JavaScript 完成，沒有任何後端；一般文字型文件載入頁面後即可離線使用，掃描影像 PDF 的 OCR 首次使用需先下載繁中／英文語言模型。瀏覽器只會儲存你的偵測規則設定，文件內容與編碼表都不會落地。" }
             },
             {
               "@type": "Question",
               "name": "支援哪些檔案格式？",
-              "acceptedAnswer": { "@type": "Answer", "text": "支援 PDF（需含文字層）、Word（.docx）、Excel（.xlsx）、TXT、Markdown，也可以直接貼上文字。單檔上限 20 MB，一次最多 10 個檔案混合處理。不支援舊版 .doc、.xls 與掃描影像 PDF。" }
+              "acceptedAnswer": { "@type": "Answer", "text": "支援 PDF（含文字層與掃描影像 OCR）、Word（.docx）、Excel（.xlsx）、TXT、Markdown，也可以直接貼上文字。單檔上限 20 MB，一次最多 10 個檔案混合處理。不支援舊版 .doc、.xls；掃描影像 PDF 會在瀏覽器內以繁中／英文 OCR，仍需逐頁校對。" }
             },
             {
               "@type": "Question",
@@ -204,10 +204,10 @@
               <tr><td>TXT／Markdown／貼上文字</td><td>.txt、.md 或直接貼上</td><td>同格式輸出；貼上的文字可一鍵複製結果</td></tr>
               <tr><td>Word</td><td>.docx</td><td>保留樣式、表格、頁首頁尾；不支援舊版 .doc</td></tr>
               <tr><td>Excel</td><td>.xlsx</td><td>保留儲存格樣式與工作表結構；處理帶財務欄位語境的數值型金額，公式儲存格維持原樣，無標籤數值與公式結果不在範圍</td></tr>
-              <tr><td>PDF</td><td>需含文字層</td><td>依原座標重建文字並內嵌中文字型，不保留圖片、圖形與原字型；掃描影像 PDF 無法處理</td></tr>
+              <tr><td>PDF</td><td>文字層或掃描影像</td><td>文字層依原座標重建；掃描影像先以繁中／英文 OCR 再重建文字。圖片、圖形與原字型不保留，OCR 結果需人工校對</td></tr>
             </tbody>
           </table>
-          <p class="muted small">單檔上限 20 MB，一次最多 10 個檔案。自動偵測不是法規或 GxP 合規判定；Excel 未帶財務欄位語境的數值、公式儲存格的結果、註解、隱藏內容與 PDF 影像／附件可能仍需另外檢查。</p>
+          <p class="muted small">單檔上限 20 MB，一次最多 10 個檔案。首次使用掃描影像 OCR 時，瀏覽器會下載繁中／英文 OCR 語言模型；文件內容仍只在本機處理。自動偵測不是法規或 GxP 合規判定；Excel 未帶財務欄位語境的數值、公式儲存格的結果、註解、隱藏內容與 PDF 附件可能仍需另外檢查。</p>
 
           <h3>常見問題</h3>
           <div id="faq" class="faq">
@@ -217,11 +217,11 @@
             </details>
             <details>
               <summary>我的檔案會被上傳到伺服器嗎？</summary>
-              <p>不會。文件解析、個資偵測、遮罩與輸出全部在你的瀏覽器內以 JavaScript 完成，沒有任何後端；載入頁面後即使離線也能使用。瀏覽器只會儲存你的偵測規則設定，文件內容與編碼表都不會落地。</p>
+              <p>不會。文件解析、個資偵測、遮罩與輸出全部在你的瀏覽器內以 JavaScript 完成，沒有任何後端；一般文字型文件載入頁面後即可離線使用，掃描影像 PDF 的 OCR 首次使用需先下載繁中／英文語言模型。瀏覽器只會儲存你的偵測規則設定，文件內容與編碼表都不會落地。</p>
             </details>
             <details>
               <summary>支援哪些檔案格式？</summary>
-              <p>支援 PDF（需含文字層）、Word（.docx）、Excel（.xlsx）、TXT、Markdown，也可以直接貼上文字。單檔上限 20 MB，一次最多 10 個檔案混合處理。不支援舊版 .doc、.xls 與掃描影像 PDF。</p>
+              <p>支援 PDF（含文字層與掃描影像 OCR）、Word（.docx）、Excel（.xlsx）、TXT、Markdown，也可以直接貼上文字。單檔上限 20 MB，一次最多 10 個檔案混合處理。不支援舊版 .doc、.xls；掃描影像 PDF 會在瀏覽器內以繁中／英文 OCR，仍需逐頁校對。</p>
             </details>
             <details>
               <summary>可以偵測哪些個人資料？</summary>
