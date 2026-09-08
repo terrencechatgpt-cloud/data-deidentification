@@ -16,6 +16,12 @@ export interface BatchManifestRow {
   count: number;
 }
 
+export interface BatchProgress {
+  current: number;
+  total: number;
+  detail?: string;
+}
+
 /** Keeps zip entry names unique by appending " (2)", " (3)"… before the extension. */
 export function uniqueNamer(): (name: string) => string {
   const taken = new Set<string>();
@@ -41,19 +47,28 @@ export function manifestCsv(rows: BatchManifestRow[]): string {
  * One archive holding every de-identified document next to its mapping table, plus 清單.csv
  * that pairs them (needed when two inputs share a base name, e.g. 報價單.pdf and 報價單.docx).
  */
-export async function buildArchive(entries: BatchEntry[]): Promise<{ blob: Blob; manifest: BatchManifestRow[] }> {
+export async function buildArchive(
+  entries: BatchEntry[],
+  onProgress?: (progress: BatchProgress) => void,
+): Promise<{ blob: Blob; manifest: BatchManifestRow[] }> {
   const zip = new JSZip();
   const unique = uniqueNamer();
   const manifest: BatchManifestRow[] = [];
-  for (const { doc, items } of entries) {
+  const total = Math.max(1, entries.length * 2 + 1);
+  onProgress?.({ current: 0, total, detail: `準備打包 ${entries.length} 個檔案` });
+  for (const [index, { doc, items }] of entries.entries()) {
+    onProgress?.({ current: index * 2, total, detail: `正在處理第 ${index + 1} / ${entries.length} 個檔案：${doc.fileName}` });
     const { edits, mapping } = applyRedactions(doc.text, items);
     const output = unique(outputFileName(doc.fileName, 'deid'));
     const mappingName = unique(mappingFileName(doc.fileName));
     zip.file(output, await generateDocument(doc, edits));
     zip.file(mappingName, serializeMapping(mapping));
     manifest.push({ source: doc.fileName, output, mapping: mappingName, count: edits.length });
+    onProgress?.({ current: index * 2 + 2, total, detail: `已完成第 ${index + 1} / ${entries.length} 個檔案` });
   }
+  onProgress?.({ current: total - 1, total, detail: '正在壓縮下載檔案…' });
   zip.file('清單.csv', manifestCsv(manifest));
   const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+  onProgress?.({ current: total, total, detail: '打包完成' });
   return { blob, manifest };
 }

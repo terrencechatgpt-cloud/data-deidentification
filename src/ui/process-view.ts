@@ -7,7 +7,7 @@ import { maskDisplay } from '../core/mask';
 import { serializeMapping } from '../core/csv';
 import { getEffectivePatterns } from '../core/pattern-store';
 import { ACCEPT_ATTR, formatLimitations, generateDocument, mappingFileName, outputFileName, parseDocument } from '../formats';
-import { button, clear, downloadBlob, dropZone, el, toast, withBusy } from './components';
+import { button, clear, downloadBlob, dropZone, el, toast, type BusyReporter, withBusy } from './components';
 import { renderDocumentPreview, type Decoration } from './preview';
 import { buildArchive } from '../formats/batch';
 import { SAMPLES, samplesSection } from './samples';
@@ -93,10 +93,36 @@ export function createProcessView(): HTMLElement {
 // ---------------------------------------------------------------------------------------
 /** Parsing a PDF/Word file (and loading its parser) can take a while: lock the page and show progress meanwhile. */
 function loadFiles(files: File[], root: HTMLElement): Promise<void> {
-  return withBusy('讀取檔案中…', () => importFiles(files, root));
+  return withBusy('讀取檔案中…', (reporter) => importFiles(files, root, reporter), {
+    estimatedMs: estimateImportMs(files),
+  });
 }
 
-async function importFiles(files: File[], root: HTMLElement): Promise<void> {
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function fileFormat(file: File): string {
+  return file.name.split('.').pop()?.toLowerCase() ?? '';
+}
+
+/** A deliberately conservative estimate; the measured rate replaces it after the first progress update. */
+function estimateFileMs(file: File): number {
+  const base = fileFormat(file) === 'pdf' ? 1400 : fileFormat(file) === 'xlsx' ? 900 : fileFormat(file) === 'docx' ? 850 : 350;
+  const sizeMs = Math.min(9000, (file.size / (1024 * 1024)) * 650);
+  return base + sizeMs;
+}
+
+function estimateImportMs(files: File[]): number {
+  return Math.max(900, files.reduce((sum, file) => sum + estimateFileMs(file), 0));
+}
+
+function estimateOutputMs(doc: LoadedDocument): number {
+  const base = doc.format === 'pdf' ? 1800 : doc.format === 'xlsx' ? 900 : doc.format === 'docx' ? 750 : 350;
+  return Math.max(900, base + Math.min(8000, (doc.text.length / 5000) * 400));
+}
+
+async function importFiles(files: File[], root: HTMLElement, reporter: BusyReporter): Promise<void> {
   const room = MAX_FILES - state.docs.length;
   if (files.length > room) {
     toast(`一次最多處理 ${MAX_FILES} 個檔案（目前已有 ${state.docs.length} 個，只能再加入 ${room} 個）`, 'error', 7000);
@@ -105,9 +131,14 @@ async function importFiles(files: File[], root: HTMLElement): Promise<void> {
   }
   let loaded = 0;
   let firstNew = -1;
-  for (const file of files) {
+  const totalSteps = files.length * 2;
+  reporter.update({ current: 0, total: totalSteps, detail: `準備處理 ${files.length} 個檔案` });
+  for (const [index, file] of files.entries()) {
+    reporter.update({ current: index * 2, total: totalSteps, detail: `正在讀取第 ${index + 1} / ${files.length} 個檔案：${file.name}` });
     try {
       const doc = await parseDocument(file);
+      reporter.update({ current: index * 2 + 1, total: totalSteps, detail: `正在偵測第 ${index + 1} / ${files.length} 個檔案：${file.name}` });
+      await yieldToBrowser();
       const book = new CodeBook();
       const d: DocState = { doc, items: detectDocument(doc, getEffectivePatterns(), book), book, downloadedDoc: false, downloadedCsv: false };
       applyDisabledCategories(d);
@@ -120,6 +151,8 @@ async function importFiles(files: File[], root: HTMLElement): Promise<void> {
     } catch (e) {
       toast(`${file.name}：${(e as Error).message}`, 'error', 7000);
     }
+    reporter.update({ current: (index + 1) * 2, total: totalSteps, detail: `已完成第 ${index + 1} / ${files.length} 個檔案` });
+    await yieldToBrowser();
   }
   if (loaded === 0) return;
   state.active = firstNew;
@@ -547,9 +580,17 @@ function locate(preview: HTMLElement, id: string): void {
 // ---------------------------------------------------------------------------------------
 async function downloadDoc(d: DocState): Promise<void> {
   try {
-    const { edits } = applyRedactions(d.doc.text, d.items);
-    toast('產生檔案中…', 'info', 2000);
-    const blob = await generateDocument(d.doc, edits);
+    const blob = await withBusy('產生去識別化檔案中…', async ({ update }) => {
+      update({ current: 0, total: 3, detail: '準備套用去識別化標記' });
+      await yieldToBrowser();
+      const { edits } = applyRedactions(d.doc.text, d.items);
+      update({ current: 1, total: 3, detail: '正在產生檔案內容' });
+      const result = await generateDocument(d.doc, edits);
+      update({ current: 2, total: 3, detail: '正在準備下載' });
+      await yieldToBrowser();
+      update({ current: 3, total: 3, detail: '完成' });
+      return result;
+    }, { estimatedMs: estimateOutputMs(d.doc) });
     downloadBlob(blob, outputFileName(d.doc.fileName, 'deid'));
     d.downloadedDoc = true;
   } catch (e) {
@@ -580,8 +621,13 @@ async function copyText(d: DocState): Promise<void> {
 /** Every document plus its mapping table in one archive (see formats/batch.ts). */
 async function downloadAll(root: HTMLElement): Promise<void> {
   try {
-    toast(`打包 ${state.docs.length} 個檔案中…`, 'info', 3000);
-    const { blob } = await buildArchive(state.docs.map((d) => ({ doc: d.doc, items: d.items })));
+    const blob = await withBusy('打包去識別化檔案中…', async (reporter) => {
+      const { blob: archive } = await buildArchive(
+        state.docs.map((d) => ({ doc: d.doc, items: d.items })),
+        (progress) => reporter.update(progress),
+      );
+      return archive;
+    }, { estimatedMs: state.docs.reduce((sum, d) => sum + estimateOutputMs(d.doc), 500) });
     for (const d of state.docs) {
       d.downloadedDoc = true;
       d.downloadedCsv = true;

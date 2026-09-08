@@ -29,4 +29,28 @@ describe('withBusy', () => {
     await tick(200);
     expect(document.querySelector<HTMLElement>('.busy-overlay')!.hidden).toBe(true);
   });
+
+  it('renders progress details and an estimated remaining time for slow tasks', async () => {
+    const app = document.getElementById('app')!;
+    let finish!: () => void;
+    const run = withBusy('處理檔案中…', async ({ update }) => {
+      update({ current: 1, total: 4, detail: '正在讀取第 1 / 2 個檔案' });
+      await tick(200);
+      update({ current: 2, total: 4, detail: '正在偵測第 1 / 2 個檔案' });
+      await new Promise<void>((resolve) => { finish = resolve; });
+    }, { estimatedMs: 4000 });
+
+    await tick(200);
+    const overlay = document.querySelector<HTMLElement>('.busy-overlay')!;
+    const progress = overlay.querySelector<HTMLElement>('.busy-progress')!;
+    expect(app.hasAttribute('inert')).toBe(true);
+    expect(progress.hidden).toBe(false);
+    expect(progress.getAttribute('aria-valuenow')).toBe('50');
+    expect(overlay.querySelector('.busy-progress-text')?.textContent).toContain('正在偵測第 1 / 2 個檔案');
+    expect(overlay.querySelector('.busy-eta')?.textContent).toContain('預估剩餘');
+
+    finish();
+    await run;
+    expect(app.hasAttribute('inert')).toBe(false);
+  });
 });
