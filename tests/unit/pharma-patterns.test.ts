@@ -46,6 +46,18 @@ describe('pharmaceutical document patterns', () => {
     expect(matches('pharma-mrn', '實驗數據 2026090801')).toEqual([]);
   });
 
+  it('detects confidential reimbursement caps written with Chinese amount units', () => {
+    expect(matches('finance-amount', '本年度限量額度為3億2,100萬元。')).toEqual(['3億2,100萬元']);
+    expect(matches('finance-amount', '年度 CAP 金額：NT$ 123,456,789 元。')).toEqual(['123,456,789']);
+    expect(matches('finance-amount', '一般敘述為3億2,100萬元。')).toEqual([]);
+  });
+
+  it('detects reimbursement percentages, including OCR-separated decimals', () => {
+    expect(matches('finance-rate', '償還比例：12.34%')).toEqual(['12.34%']);
+    expect(matches('finance-rate', '醫令申報總金額之12. 34%，依約償還')).toEqual(['12. 34%']);
+    expect(matches('finance-rate', '一般統計結果為12.34%')).toEqual([]);
+  });
+
   it('detects dates, invoice numbers and contract/procurement codes', () => {
     expect(matches('pharma-date', '簽署日 2026-09-08；出生日期：民國85年2月3日')).toEqual([
       '2026-09-08',

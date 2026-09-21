@@ -266,8 +266,8 @@ function renderSafetyCard(): HTMLElement {
     el('ul', {},
       el('li', {}, '自動偵測完成後，請逐頁／逐工作表覆核；漏抓內容可在預覽中圈選新增。'),
       el('li', {}, 'Excel 輸出時所有非公式數值儲存格會統一替換為 999；公式儲存格維持原樣，日期格式可能依原格式顯示 999 的日期序號。公式結果、註解、隱藏工作表與部分中繼資料仍不在目前範圍。'),
-      el('li', {}, '掃描型 PDF 沒有文字層時會在瀏覽器內以繁中／英文 OCR；首次使用需下載 OCR 語言模型，完成後請逐頁確認錯字、漏字與表格內容。'),
-      el('li', {}, '財務金額、日期、試驗編號、批號與產品代碼可能影響業務判讀；下載前請依用途決定是否保留或替換。'),
+      el('li', {}, '掃描型 PDF 沒有文字層時會在瀏覽器內以繁中／英文 OCR；輸出保留原頁視覺版面，並把遮罩直接燒入新頁面影像，首次使用需下載 OCR 語言模型，完成後仍請逐頁確認。'),
+      el('li', {}, '合約中的 CAP／限量額度、還款／折扣比例，以及日期、試驗編號、批號與產品代碼可能影響業務判讀；下載前請依用途決定是否保留或替換。'),
       el('li', {}, 'CSV 編碼表可以還原原文，請視同原始機密文件保存與傳遞。'),
     ),
   );
@@ -373,7 +373,7 @@ function renderWorkspace(root: HTMLElement): HTMLElement {
   const listToggleHost = el('div', { class: 'list-toggle-host' });
   const previewWrap = el('div', { class: 'preview-wrap' },
     el('div', { class: 'preview-head' }, el('h3', {}, '去識別化預覽'), listToggleHost),
-    el('p', { class: 'muted small' }, `${previewHint(d.doc)}預覽以遮罩樣式呈現；滑鼠移到標記可看原文與輸出標記，點擊標記可取消；圈選文字可手動新增項目。財務金額、日期、批號與產品代碼請特別確認。`),
+    el('p', { class: 'muted small' }, `${previewHint(d.doc)}預覽以遮罩樣式呈現；滑鼠移到標記可看原文與輸出標記，點擊標記可取消；圈選文字可手動新增項目。CAP／限量額度、財務比例、日期、批號與產品代碼請特別確認。`),
     legendHost,
     preview,
   );

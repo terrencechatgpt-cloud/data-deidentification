@@ -74,7 +74,8 @@ const hasContext = (before: string, pattern: RegExp): boolean => pattern.test(be
 const MRN_CONTEXT = /(?:病歷(?:號|編號)|就診號|MRN|medical\s+record)\s*[:：#-]?\s*$/iu;
 const BANK_CONTEXT = /(?:銀行|匯款|收款|付款|帳號|賬號|account|acct)[^\n]{0,30}$/iu;
 const CARD_CONTEXT = /(?:信用卡|卡號|credit\s*card)[^\n]{0,20}$/iu;
-const AMOUNT_CONTEXT = /(?:還款(?:金額|款項|總額)?|退款(?:金額|款項|總額)?|償還(?:金額|款項|總額)?|付款(?:金額|款項|總額)?|支付(?:金額|款項|總額)?|應(?:付|收)(?:金額|款項|總額)?|金額|款項|總額|總計|合計|小計|單價|報價|折扣|收入|營收|支出|費用|成本|預算|稅額|稅金|消費|營業額|回款|借款|貸款|本金|利息|餘額|amount(?:\s+(?:due|paid|total))?|payment|repayment|refund|revenue|income|expense|cost|budget|price|total|subtotal|tax|balance|principal|interest)[\s:：#-]*(?:NT\$|NTD|TWD|USD|EUR|JPY|CNY|RMB|新臺幣|新台幣|人民幣|美元|歐元|日圓|[$＄¥￥])?[\s]*$/iu;
+const AMOUNT_CONTEXT = /(?:還款(?:金額|款項|總額)?|退款(?:金額|款項|總額)?|返還(?:金額|款項|總額)?|償還(?:金額|款項|總額)?|付款(?:金額|款項|總額)?|支付(?:金額|款項|總額)?|應(?:付|收)(?:金額|款項|總額)?|限量\s*額度(?:為|是)?|上限\s*額度(?:為|是)?|額度\s*上限(?:為|是)?|CAP(?:\s*(?:金額|額度|上限))?|金額|款項|總額|總計|合計|小計|單價|報價|折扣|收入|營收|支出|費用|成本|預算|稅額|稅金|消費|營業額|回款|借款|貸款|本金|利息|餘額|amount(?:\s+(?:due|paid|total))?|payment|repayment|refund|revenue|income|expense|cost|budget|price|total|subtotal|tax|balance|principal|interest)[\s:：#-]*(?:NT\$|NTD|TWD|USD|EUR|JPY|CNY|RMB|新臺幣|新台幣|人民幣|美元|歐元|日圓|[$＄¥￥])?[\s]*$/iu;
+const RATE_CONTEXT = /(?:還款|退款|返還|償還|補償|扣除|折扣|回饋|申報(?:總)?金額|醫令申報金額|限量\s*額度|級距|比例|利率|rebate|repayment|refund|discount|rate)[^\n]{0,80}$/iu;
 
 const PHARMA_ID_REGEX =
   '(?<![A-Za-z0-9\\u4e00-\\u9fa5])(?:SUBJ|SUBJECT|PT|PATIENT|CASE)[-_ ]?[A-Z0-9-]{2,20}(?![A-Za-z0-9])';
@@ -89,7 +90,11 @@ const PRODUCT_CODE_REGEX =
 const CONTRACT_CODE_REGEX =
   '(?<![A-Za-z0-9])(?:CON|CONTRACT|PO|PR|DOC|MEMO|SC)[-_][A-Z0-9-]{3,24}(?![A-Za-z0-9])';
 const INVOICE_REGEX = '(?<![A-Za-z0-9])[A-Z]{2}\\d{8}(?![A-Za-z0-9])';
-const AMOUNT_REGEX = '(?<![\\d./-])(?:\\d{1,3}(?:,\\d{3})+|\\d{3,12}(?:\\.\\d{1,2})?|\\d{1,2}\\.\\d{1,2})(?![\\d./-]|\\s*%)';
+const GROUPED_NUMBER = '(?:\\d{1,3}(?:\\s*[,，]\\s*\\d{3})+|\\d{1,12})';
+const CHINESE_UNIT_AMOUNT = `(?:${GROUPED_NUMBER}\\s*億(?:\\s*${GROUPED_NUMBER}\\s*萬)?\\s*元|${GROUPED_NUMBER}\\s*萬\\s*元)`;
+const DECIMAL_AMOUNT = '(?:\\d{1,3}(?:\\s*[,，]\\s*\\d{3})+|\\d{3,12}(?:\\s*\\.\\s*\\d{1,2})?|\\d{1,2}\\s*\\.\\s*\\d{1,2})';
+const AMOUNT_REGEX = `(?<![\\d./-])(?:${CHINESE_UNIT_AMOUNT}|${DECIMAL_AMOUNT})(?![\\d./-]|\\s*%)`;
+const RATE_REGEX = '(?<![\\d.])\\d{1,3}(?:\\s*\\.\\s*\\d{1,2})?\\s*%(?!\\d)';
 const DATE_REGEX =
   '(?<![\\d])(?:(?:19|20)\\d{2}[-/.]\\d{1,2}[-/.]\\d{1,2}|民國\\d{2,3}年\\d{1,2}月\\d{1,2}日)(?![\\d])';
 
@@ -224,6 +229,17 @@ export const BUILTIN_PATTERNS: Pattern[] = [
     enabled: true,
     domain: 'pharma',
     validate: (_match, before) => hasContext(before, AMOUNT_CONTEXT),
+  },
+  {
+    id: 'finance-rate',
+    name: '還款／折扣／財務比例',
+    category: '財務比例',
+    source: 'builtin',
+    regex: RATE_REGEX,
+    example: '償還比例 17.55%、折扣率 12.5%',
+    enabled: true,
+    domain: 'pharma',
+    validate: (_match, before) => hasContext(before, RATE_CONTEXT),
   },
   {
     id: 'finance-invoice',

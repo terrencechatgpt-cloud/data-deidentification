@@ -61,13 +61,32 @@ describe('PDF round trip', () => {
       [{ bytes: pageImage, width: 200, height: 200 }],
     );
 
+    const fillRect = vi.fn();
+    const context = { drawImage: vi.fn(), fillRect, fillStyle: '' };
+    const fakeCanvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn(() => context),
+      toBlob: vi.fn((callback: BlobCallback) => callback(new Blob([pageImage as BlobPart], { type: 'image/png' }))),
+    };
+    const originalCreateElement = document.createElement.bind(document);
+    const createElement = vi.spyOn(document, 'createElement').mockImplementation(((tagName: string) =>
+      tagName === 'canvas' ? fakeCanvas : originalCreateElement(tagName)) as typeof document.createElement);
+    Object.defineProperty(globalThis, 'createImageBitmap', {
+      configurable: true,
+      value: vi.fn(async () => ({ width: 1, height: 1, close: vi.fn() })),
+    });
+
     const blob = await generatePdf(doc, [{ start: 5, end: 8, replacement: '[姓名:abcdef]' }]);
+    createElement.mockRestore();
+    Reflect.deleteProperty(globalThis, 'createImageBitmap');
     const out = await parsePdf(new File([blob], 'scan.deid.pdf'));
 
     expect(out.text).toContain('機密文件');
     expect(out.text).toContain('[姓名:abcdef]');
     expect(out.text).not.toContain('王小明');
     expect(Buffer.from(await blob.arrayBuffer()).toString('latin1')).toContain('/Subtype /Image');
+    expect(fillRect).toHaveBeenCalled();
   });
 
   it('extracts text with positions and rebuilds a text-only PDF without the originals', async () => {

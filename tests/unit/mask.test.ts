@@ -104,6 +104,8 @@ describe('maskDisplay', () => {
       { category: '市話', original: '(02)2712-3456' },
       { category: '地址', original: '台北市信義區市府路45號8樓' },
       { category: '電子郵件', original: 'xiaoming.wang@example.com' },
+      { category: '財務金額', original: '2億1,300萬元' },
+      { category: '財務比例', original: '12.34%' },
       { category: '識別碼', original: 'EMP-004521' },
     ];
 

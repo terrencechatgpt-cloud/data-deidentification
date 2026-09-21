@@ -380,6 +380,34 @@ describe('renderDocumentPreview — pdf layout', () => {
     expect(mark).not.toBeNull();
     expect(mark.dataset.id).toBe('p1');
   });
+
+  it('uses the retained page image as the background for scanned PDF previews', () => {
+    const container = document.createElement('div');
+    const text = 'Confidential';
+    const layout: DocLayout = {
+      kind: 'pdf',
+      pages: [{ width: 100, height: 200, items: [{ start: 0, end: text.length, x: 10, y: 150, fontSize: 12, width: 70 }] }],
+    };
+    const doc: LoadedDocument = {
+      fileName: 'scan.pdf',
+      format: 'pdf',
+      text,
+      layout,
+      handle: {
+        pages: [],
+        segments: [],
+        itemPage: [],
+        itemIndex: [],
+        pageImages: [{ bytes: new Uint8Array([1, 2, 3]), width: 100, height: 200 }],
+      },
+    };
+
+    renderDocumentPreview(container, doc, []);
+
+    const page = container.querySelector('.pdf-page');
+    expect(page?.classList.contains('pdf-page-scanned')).toBe(true);
+    expect(page?.querySelector('img.pdf-page-image')).not.toBeNull();
+  });
 });
 
 describe('renderDocumentPreview — opts.plain and preview-structured', () => {

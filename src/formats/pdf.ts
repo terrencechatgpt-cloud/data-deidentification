@@ -1,7 +1,7 @@
 import * as pdfjs from 'pdfjs-dist';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { PDFDocument, PDFFont, PDFPage, rgb } from 'pdf-lib';
+import { PDFDocument, PDFFont } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import type { LoadedDocument, PdfItemLayout, TextEdit } from '../core/types';
 import { distributeEdits, type Segment } from './segments';
@@ -160,16 +160,103 @@ function fitSize(font: PDFFont, text: string, size: number, maxWidth: number): n
   return Math.max(4, (size * maxWidth) / w);
 }
 
-function drawRedactionPatch(page: PDFPage, item: PdfTextItem): void {
-  const padX = Math.max(1, item.fontSize * 0.08);
-  const padY = Math.max(1, item.fontSize * 0.18);
-  page.drawRectangle({
+interface RedactionRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function redactionRect(item: PdfTextItem): RedactionRect {
+  // OCR boxes can be a few pixels tighter than the visible glyphs. Generous horizontal padding
+  // prevents a leading digit, decimal point, or percent sign from surviving at the bar edge.
+  const padX = Math.max(2, item.fontSize * 0.38);
+  const padY = Math.max(1, item.fontSize * 0.22);
+  return {
     x: Math.max(0, item.x - padX),
     y: Math.max(0, item.y - item.fontSize * 0.25 - padY),
     width: Math.max(1, item.width + padX * 2),
     height: Math.max(1, item.fontSize * 1.15 + padY * 2),
-    color: rgb(1, 1, 1),
+  };
+}
+
+function mergeLineRects(rects: RedactionRect[]): RedactionRect[] {
+  const lines: RedactionRect[] = [];
+  for (const rect of [...rects].sort((a, b) => b.y - a.y || a.x - b.x)) {
+    const line = lines.find((candidate) => {
+      const center = candidate.y + candidate.height / 2;
+      const rectCenter = rect.y + rect.height / 2;
+      return Math.abs(center - rectCenter) <= Math.max(candidate.height, rect.height) * 0.6;
+    });
+    if (!line) {
+      lines.push({ ...rect });
+      continue;
+    }
+    const right = Math.max(line.x + line.width, rect.x + rect.width);
+    const top = Math.max(line.y + line.height, rect.y + rect.height);
+    line.x = Math.min(line.x, rect.x);
+    line.y = Math.min(line.y, rect.y);
+    line.width = right - line.x;
+    line.height = top - line.y;
+  }
+  return lines;
+}
+
+function scannedRedactionRects(handle: PdfHandle, edits: TextEdit[]): Map<number, RedactionRect[]> {
+  const byPage = new Map<number, RedactionRect[]>();
+  for (const edit of edits) {
+    const editRects = new Map<number, RedactionRect[]>();
+    for (let segmentIndex = 0; segmentIndex < handle.segments.length; segmentIndex += 1) {
+      const segment = handle.segments[segmentIndex];
+      if (segment.end <= edit.start || segment.start >= edit.end) continue;
+      const pageIndex = handle.itemPage[segmentIndex];
+      const item = handle.pages[pageIndex]?.items[handle.itemIndex[segmentIndex]];
+      if (!item) continue;
+      if (!editRects.has(pageIndex)) editRects.set(pageIndex, []);
+      editRects.get(pageIndex)!.push(redactionRect(item));
+    }
+    for (const [pageIndex, rects] of editRects) {
+      if (!byPage.has(pageIndex)) byPage.set(pageIndex, []);
+      byPage.get(pageIndex)!.push(...mergeLineRects(rects));
+    }
+  }
+  return byPage;
+}
+
+async function burnRedactionsIntoPageImage(
+  source: PdfPageImage,
+  page: PdfPage,
+  redactions: RedactionRect[],
+): Promise<Uint8Array> {
+  if (redactions.length === 0) return source.bytes;
+  const bitmap = await createImageBitmap(new Blob([source.bytes as BlobPart], { type: 'image/png' }));
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    bitmap.close();
+    throw new Error('無法建立掃描 PDF 安全遮罩畫布');
+  }
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const scaleX = canvas.width / page.width;
+  const scaleY = canvas.height / page.height;
+  context.fillStyle = '#1f1f1f';
+  for (const rect of redactions) {
+    context.fillRect(
+      rect.x * scaleX,
+      canvas.height - (rect.y + rect.height) * scaleY,
+      rect.width * scaleX,
+      rect.height * scaleY,
+    );
+  }
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((value) => value ? resolve(value) : reject(new Error('無法輸出掃描 PDF 安全遮罩影像')), 'image/png');
   });
+  canvas.width = 1;
+  canvas.height = 1;
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 /**
@@ -196,8 +283,16 @@ export async function generatePdf(doc: LoadedDocument, edits: TextEdit[]): Promi
   const supported = new Set(font.getCharacterSet());
   const pageImages = handle.pageImages;
   const preserveScannedLayout = pageImages?.length === handle.pages.length;
-  const embeddedPageImages = preserveScannedLayout
-    ? await Promise.all(pageImages!.map((image) => out.embedPng(image.bytes)))
+  const imageRedactions = preserveScannedLayout ? scannedRedactionRects(handle, edits) : undefined;
+  const securedPageImages = preserveScannedLayout
+    ? await Promise.all(pageImages!.map((image, pageIndex) => burnRedactionsIntoPageImage(
+        image,
+        handle.pages[pageIndex],
+        imageRedactions?.get(pageIndex) ?? [],
+      )))
+    : undefined;
+  const embeddedPageImages = securedPageImages
+    ? await Promise.all(securedPageImages.map((bytes) => out.embedPng(bytes)))
     : undefined;
 
   handle.pages.forEach((pg, pIdx) => {
@@ -216,16 +311,16 @@ export async function generatePdf(doc: LoadedDocument, edits: TextEdit[]): Promi
     pg.items.forEach((it, iIdx) => {
       const changed = pageChanges?.has(iIdx) ?? false;
       const text = sanitizeForFont(changed ? pageChanges!.get(iIdx)! : it.text, supported);
-      if (sourceImage && changed) drawRedactionPatch(page, it);
       if (text.length === 0) return;
       // Replacement text may run past the original item; let it use the space up to the right
       // margin before shrinking, so whole-line items keep their size. For an OCR background,
       // stay inside the original word box to avoid colliding with neighbouring scan content.
       const room = sourceImage ? it.width : Math.max(it.width, pg.width - it.x - 36);
       const size = changed ? fitSize(font, text, it.fontSize, room) : it.fontSize;
-      // OCR pages already contain the unchanged text in the background. Add an invisible text
-      // layer for search/copy; changed items are visible replacement markers only.
-      page.drawText(text, { x: it.x, y: it.y, size, font, opacity: sourceImage && !changed ? 0 : 1 });
+      // OCR pages already contain the text in the page image. Keep both unchanged text and
+      // replacement markers in an invisible searchable layer; opaque patches provide clean,
+      // unambiguous redaction without squeezing long marker strings into small OCR word boxes.
+      page.drawText(text, { x: it.x, y: it.y, size, font, opacity: sourceImage ? 0 : 1 });
     });
   });
 

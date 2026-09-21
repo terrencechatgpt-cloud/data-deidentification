@@ -1,6 +1,6 @@
 import * as pdfjs from 'pdfjs-dist';
 import type { Block, Word } from 'tesseract.js';
-import { createWorker } from 'tesseract.js';
+import { createWorker, PSM } from 'tesseract.js';
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { Segment } from './segments';
 import { buildPdfDocument, type PdfPage, type PdfPageImage, type PdfTextItem } from './pdf';
@@ -11,6 +11,9 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
 const MAX_RENDER_PIXELS = 4_000_000;
 const MAX_OCR_SCALE = 2;
+const COMMERCIAL_RATE_CONTEXT = /(?:還\s*款|退\s*款|返\s*還|償\s*還|限\s*量\s*額\s*度|折\s*扣)/u;
+const PERCENT_TOKEN = /^\d{1,3}(?:[.,]\d{1,2})?\s*%$/u;
+const PERCENT_IN_TEXT = /\d{1,3}(?:[.,]\d{1,2})?\s*%/u;
 
 function report(
   onProgress: ((progress: ParseProgress) => void) | undefined,
@@ -108,6 +111,54 @@ function appendBlockWords(
   return text;
 }
 
+function wordsInBlocks(blocks: Block[]): Word[] {
+  return blocks.flatMap((block) =>
+    block.paragraphs.flatMap((paragraph) => paragraph.lines.flatMap((line) => line.words)),
+  );
+}
+
+function appendRecoveredRateWords(
+  blocks: Block[],
+  scale: number,
+  pageHeight: number,
+  pageIndex: number,
+  text: string,
+  items: PdfTextItem[],
+  segments: Segment[],
+  itemPage: number[],
+  itemIndex: number[],
+): string {
+  for (const word of wordsInBlocks(blocks)) {
+    const normalized = word.text.trim().replace(',', '.');
+    if (!PERCENT_TOKEN.test(normalized)) continue;
+    const x = word.bbox.x0 / scale;
+    const top = word.bbox.y0 / scale;
+    const fontSize = Math.max(6, ((word.bbox.y1 - word.bbox.y0) / scale) * 0.85);
+    const y = pageHeight - top - fontSize * 0.8;
+    const alreadyPresent = items.some((item) =>
+      PERCENT_IN_TEXT.test(item.text)
+      && Math.abs(item.x - x) < Math.max(4, fontSize)
+      && Math.abs(item.y - y) < Math.max(4, fontSize),
+    );
+    if (alreadyPresent) continue;
+    if (text && !text.endsWith('\n')) text += '\n';
+    text += '償還比例：';
+    text = appendWord(
+      { ...word, text: normalized },
+      scale,
+      pageHeight,
+      text,
+      items,
+      segments,
+      itemPage,
+      itemIndex,
+      pageIndex,
+      undefined,
+    ).text;
+  }
+  return text;
+}
+
 function appendFallbackText(
   rawText: string,
   pageWidth: number,
@@ -197,9 +248,26 @@ export async function parsePdfWithOcr(
       const pageImage = await canvasPng(canvas);
       const result = await worker.recognize(canvas, {}, { blocks: true });
       const items: PdfTextItem[] = [];
+      const pageTextStart = text.length;
       text = appendBlockWords(result.data.blocks ?? [], scale, height, p - 1, text, items, segments, itemPage, itemIndex);
       if (items.length === 0) {
         text = appendFallbackText(result.data.text, width, height, p - 1, text, items, segments, itemPage, itemIndex);
+      }
+      const pageText = text.slice(pageTextStart);
+      const recognizedRateCount = pageText.match(/\d{1,3}(?:[.,]\d{1,2})?\s*%/gu)?.length ?? 0;
+      // AUTO segmentation often discards text inside ruled reimbursement tables. Only pages
+      // with commercial context and fewer than two visible rates get a focused numeric pass,
+      // keeping ordinary scans fast while recovering table percentages and their coordinates.
+      if (COMMERCIAL_RATE_CONTEXT.test(pageText) && recognizedRateCount < 2) {
+        await worker.setParameters({
+          tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+          tessedit_char_whitelist: '0123456789.,%Xx',
+        });
+        const rateResult = await worker.recognize(canvas, {}, { blocks: true });
+        text = appendRecoveredRateWords(
+          rateResult.data.blocks ?? [], scale, height, p - 1, text, items, segments, itemPage, itemIndex,
+        );
+        await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO, tessedit_char_whitelist: '' });
       }
       pages.push({ width, height, items });
       pageImages.push({ bytes: pageImage, width, height });

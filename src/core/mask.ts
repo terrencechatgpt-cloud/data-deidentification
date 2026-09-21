@@ -54,6 +54,7 @@ export function maskDisplay(category: Category, original: string): string {
       return digits.length >= 4 ? `****-****-****-${digits.slice(-4)}` : keepEnds(original, 2, 2);
     }
     case '財務金額':
+    case '財務比例':
       return original.replace(/\d/gu, '*');
     case '發票／單據號碼':
       return keepEnds(original, 2, 2);

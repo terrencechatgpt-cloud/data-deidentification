@@ -1,4 +1,5 @@
 import type { DocxParagraphLayout, LoadedDocument } from '../core/types';
+import type { PdfHandle } from '../formats/pdf';
 import { clear, el } from './components';
 
 /** A highlighted span of the full text: an active redaction, a cancelled one, or a restored value. */
@@ -198,8 +199,19 @@ function renderXlsx(container: HTMLElement, doc: LoadedDocument, decos: Decorati
 // ---------------------------------------------------------------------------------------
 // PDF: each page as a box with text items at their original positions, scaled to fit.
 // ---------------------------------------------------------------------------------------
+function pageImageUrl(bytes: Uint8Array): { url: string; revoke?: () => void } {
+  if (typeof URL.createObjectURL === 'function') {
+    const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/png' }));
+    return { url, revoke: () => URL.revokeObjectURL(url) };
+  }
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return { url: `data:image/png;base64,${btoa(binary)}` };
+}
+
 function renderPdf(container: HTMLElement, doc: LoadedDocument, decos: Decoration[], pages: { width: number; height: number; items: { start: number; end: number; x: number; y: number; fontSize: number; width: number }[] }[]): void {
   const host = el('div', { class: 'pdf-pages' });
+  const pageImages = (doc.handle as Partial<PdfHandle> | null)?.pageImages;
   pages.forEach((pg, i) => {
     const page = el('div', { class: 'pdf-page' });
     page.style.setProperty('--w', String(pg.width));
@@ -207,6 +219,18 @@ function renderPdf(container: HTMLElement, doc: LoadedDocument, decos: Decoratio
     // Height from the aspect ratio rather than from --s, so the page is already full-size when fit()
     // first measures; an empty-looking scroll container would snap its (and the window's) scroll to 0.
     page.style.aspectRatio = `${pg.width} / ${pg.height}`;
+    const pageImage = pageImages?.[i];
+    if (pageImage) {
+      page.classList.add('pdf-page-scanned');
+      const source = pageImageUrl(pageImage.bytes);
+      const image = el('img', { class: 'pdf-page-image', alt: '', 'aria-hidden': 'true' }) as HTMLImageElement;
+      image.src = source.url;
+      if (source.revoke) {
+        image.addEventListener('load', source.revoke, { once: true });
+        image.addEventListener('error', source.revoke, { once: true });
+      }
+      page.append(image);
+    }
     for (const it of pg.items) {
       const span = el('span', { class: 'pdf-item', 'data-w': String(it.width) });
       span.style.left = `calc(var(--s) * ${it.x}px)`;
