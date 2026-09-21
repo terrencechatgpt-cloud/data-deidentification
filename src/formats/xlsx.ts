@@ -533,11 +533,24 @@ function scrubSharedStrings(xml: string, referenced: Set<number>): string {
 }
 
 /**
- * Changed cells are rewritten as inline strings so every cell keeps its own code even when
- * several cells originally shared one entry in sharedStrings.xml. Styles (the `s` attribute)
- * and every other part of the workbook are untouched, except that shared-string entries no
- * longer referenced by any cell are blanked (see scrubSharedStrings).
+ * Changed text cells are rewritten as inline strings so every cell keeps its own code even when
+ * several cells originally shared one entry in sharedStrings.xml. Non-formula numeric cells are
+ * always written as the numeric value 999. Styles (the `s` attribute) and every other part of
+ * the workbook are untouched, except that shared-string entries no longer referenced by any
+ * cell are blanked (see scrubSharedStrings).
  */
+function rewriteNumericCellXml(cellXml: string, value: number): string {
+  const valueStart = findXmlTag(cellXml, 'v', 0);
+  if (valueStart < 0) return cellXml;
+  const openEnd = cellXml.indexOf('>', valueStart + 2);
+  if (openEnd < 0) return cellXml;
+  const close = cellXml.indexOf('</v', openEnd + 1);
+  if (close < 0) return cellXml;
+  const closeEnd = cellXml.indexOf('>', close + 3);
+  if (closeEnd < 0) return cellXml;
+  return `${cellXml.slice(0, openEnd + 1)}${value}${cellXml.slice(close)}`;
+}
+
 export async function generateXlsx(doc: LoadedDocument, edits: TextEdit[]): Promise<Blob> {
   const handle = doc.handle as XlsxHandle;
   const changes = distributeEdits(handle.segments, edits);
@@ -554,22 +567,25 @@ export async function generateXlsx(doc: LoadedDocument, edits: TextEdit[]): Prom
     const cellChanges = perSheet.get(sheetIdx);
     let sheetXml = sheet.xml;
     const changedStarts = new Set<number>();
+    const replacements = new Map<number, { start: number; end: number; value: string; numeric: boolean }>();
     if (cellChanges) {
-      const replacements = Array.from(cellChanges.entries())
-        .map(([cellIdx, value]) => {
-          const cell = sheet.detectableCells[cellIdx];
-          if (!cell) return null;
-          changedStarts.add(cell.start);
-          return { start: cell.start, end: cell.end, value };
-        })
-        .filter((replacement): replacement is { start: number; end: number; value: string } => replacement !== null)
-        .sort((a, b) => b.start - a.start);
-      for (const replacement of replacements) {
-        sheetXml = `${sheetXml.slice(0, replacement.start)}${rewriteCellXml(
-          sheetXml.slice(replacement.start, replacement.end),
-          replacement.value,
-        )}${sheetXml.slice(replacement.end)}`;
+      for (const [cellIdx, value] of cellChanges) {
+        const cell = sheet.detectableCells[cellIdx];
+        if (!cell || cell.numeric) continue;
+        changedStarts.add(cell.start);
+        replacements.set(cell.start, { start: cell.start, end: cell.end, value, numeric: false });
       }
+    }
+    for (const cell of sheet.allCells) {
+      if (!cell.numeric) continue;
+      replacements.set(cell.start, { start: cell.start, end: cell.end, value: '999', numeric: true });
+    }
+    for (const replacement of Array.from(replacements.values()).sort((a, b) => b.start - a.start)) {
+      const cellXml = sheetXml.slice(replacement.start, replacement.end);
+      const rewritten = replacement.numeric
+        ? rewriteNumericCellXml(cellXml, 999)
+        : rewriteCellXml(cellXml, replacement.value);
+      sheetXml = `${sheetXml.slice(0, replacement.start)}${rewritten}${sheetXml.slice(replacement.end)}`;
     }
     for (const cell of sheet.allCells) {
       if (cell.type !== 's' || cell.sharedIndex === null || changedStarts.has(cell.start)) continue;

@@ -1,4 +1,4 @@
-import type { DocFormat, LoadedDocument, TextEdit } from '../core/types';
+import type { DocFormat, LoadedDocument, RedactionItem, TextEdit } from '../core/types';
 import { MAX_FILE_BYTES } from '../core/types';
 import { generatePlainText, parsePlainText } from './plaintext';
 
@@ -82,6 +82,18 @@ export async function generateDocument(doc: LoadedDocument, edits: TextEdit[]): 
   }
 }
 
+/**
+ * Excel numeric cells are masked directly in the workbook generator as 999 rather than via
+ * text markers. Keep those cells out of the mapping table so restore never advertises codes
+ * that cannot exist in the generated workbook.
+ */
+export function redactionItemsForOutput(doc: LoadedDocument, items: RedactionItem[]): RedactionItem[] {
+  if (doc.format !== 'xlsx') return items;
+  const ranges = (doc.handle as { financialRanges?: { start: number; end: number }[] }).financialRanges ?? [];
+  if (ranges.length === 0) return items;
+  return items.filter((item) => !ranges.some((range) => item.start >= range.start && item.end <= range.end));
+}
+
 export function outputFileName(original: string, suffix: string): string {
   const dot = original.lastIndexOf('.');
   if (dot <= 0) return `${original}.${suffix}`;
@@ -99,7 +111,7 @@ export function formatLimitations(format: DocFormat): string | null {
     return 'PDF 文字層依原座標重建；掃描型 PDF 會先在瀏覽器內以繁中／英文 OCR，再重建文字版面。圖片、圖形、原字型與 OCR 可能誤認的內容不會保留，請逐頁校對並另行確認附件與中繼資料。';
   }
   if (format === 'xlsx') {
-    return 'Excel 輸出保留儲存格樣式與工作表結構；帶有財務欄位語境的數值型金額也會處理。公式儲存格維持原樣，不會被偵測或改寫；公式結果、工作表名稱、註解、隱藏內容與部分中繼資料不在偵測範圍，其他無標籤數值不會直接遮罩。';
+    return 'Excel 輸出保留儲存格樣式與工作表結構；所有非公式數值儲存格會統一替換為 999。公式儲存格維持原樣，不會被改寫；日期格式可能依原格式顯示 999 的日期序號，公式結果、工作表名稱、註解、隱藏內容與部分中繼資料不在偵測範圍。';
   }
   if (format === 'docx') {
     return 'Word 輸出保留原有樣式與表格；文字方塊、註解等特殊區域可能未涵蓋，請以預覽為準。';

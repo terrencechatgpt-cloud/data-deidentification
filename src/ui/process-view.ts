@@ -6,7 +6,7 @@ import { CodeBook, buildMarker, parseMarkers } from '../core/codes';
 import { maskDisplay } from '../core/mask';
 import { serializeMapping } from '../core/csv';
 import { getEffectivePatterns } from '../core/pattern-store';
-import { ACCEPT_ATTR, formatLimitations, generateDocument, mappingFileName, outputFileName, parseDocument, type ParseProgress } from '../formats';
+import { ACCEPT_ATTR, formatLimitations, generateDocument, mappingFileName, outputFileName, parseDocument, redactionItemsForOutput, type ParseProgress } from '../formats';
 import { button, clear, downloadBlob, dropZone, el, toast, type BusyProgress, type BusyReporter, withBusy } from './components';
 import { renderDocumentPreview, type Decoration } from './preview';
 import { buildArchive } from '../formats/batch';
@@ -261,7 +261,7 @@ function renderSafetyCard(): HTMLElement {
     el('p', {}, '這是文件處理與覆核輔助工具，不代表法規、GxP 或公司 SOP 的最終判定。'),
     el('ul', {},
       el('li', {}, '自動偵測完成後，請逐頁／逐工作表覆核；漏抓內容可在預覽中圈選新增。'),
-      el('li', {}, 'Excel 帶有財務欄位標籤的數值型金額會偵測；公式儲存格維持原樣，公式結果、註解、隱藏工作表與部分中繼資料仍不在目前範圍。'),
+      el('li', {}, 'Excel 輸出時所有非公式數值儲存格會統一替換為 999；公式儲存格維持原樣，日期格式可能依原格式顯示 999 的日期序號。公式結果、註解、隱藏工作表與部分中繼資料仍不在目前範圍。'),
       el('li', {}, '掃描型 PDF 沒有文字層時會在瀏覽器內以繁中／英文 OCR；首次使用需下載 OCR 語言模型，完成後請逐頁確認錯字、漏字與表格內容。'),
       el('li', {}, '財務金額、日期、試驗編號、批號與產品代碼可能影響業務判讀；下載前請依用途決定是否保留或替換。'),
       el('li', {}, 'CSV 編碼表可以還原原文，請視同原始機密文件保存與傳遞。'),
@@ -623,7 +623,7 @@ async function downloadDoc(d: DocState): Promise<void> {
     const blob = await withBusy('產生去識別化檔案中…', async ({ update }) => {
       update({ current: 0, total: 3, detail: '準備套用去識別化標記' });
       await yieldToBrowser();
-      const { edits } = applyRedactions(d.doc.text, d.items);
+      const { edits } = applyRedactions(d.doc.text, redactionItemsForOutput(d.doc, d.items));
       update({ current: 1, total: 3, detail: '正在產生檔案內容' });
       const result = await generateDocument(d.doc, edits);
       update({ current: 2, total: 3, detail: '正在準備下載' });
@@ -639,7 +639,7 @@ async function downloadDoc(d: DocState): Promise<void> {
 }
 
 function csvBlob(d: DocState): Blob {
-  const { mapping } = applyRedactions(d.doc.text, d.items);
+  const { mapping } = applyRedactions(d.doc.text, redactionItemsForOutput(d.doc, d.items));
   return new Blob([serializeMapping(mapping)], { type: 'text/csv;charset=utf-8' });
 }
 
@@ -649,7 +649,7 @@ function downloadCsv(d: DocState): void {
 }
 
 async function copyText(d: DocState): Promise<void> {
-  const { redactedText } = applyRedactions(d.doc.text, d.items);
+  const { redactedText } = applyRedactions(d.doc.text, redactionItemsForOutput(d.doc, d.items));
   try {
     await navigator.clipboard.writeText(redactedText);
     toast('已複製去識別化文字（編碼表仍需另外下載才能還原）', 'success', 4000);
@@ -663,7 +663,7 @@ async function downloadAll(root: HTMLElement): Promise<void> {
   try {
     const blob = await withBusy('打包去識別化檔案中…', async (reporter) => {
       const { blob: archive } = await buildArchive(
-        state.docs.map((d) => ({ doc: d.doc, items: d.items })),
+        state.docs.map((d) => ({ doc: d.doc, items: redactionItemsForOutput(d.doc, d.items) })),
         (progress) => reporter.update(progress),
       );
       return archive;

@@ -2,7 +2,7 @@ import JSZip from 'jszip';
 import type { LoadedDocument, RedactionItem } from '../core/types';
 import { applyRedactions } from '../core/redactor';
 import { serializeMapping } from '../core/csv';
-import { generateDocument, mappingFileName, outputFileName } from './index';
+import { generateDocument, mappingFileName, outputFileName, redactionItemsForOutput } from './index';
 
 export interface BatchEntry {
   doc: LoadedDocument;
@@ -58,7 +58,8 @@ export async function buildArchive(
   onProgress?.({ current: 0, total, detail: `準備打包 ${entries.length} 個檔案` });
   for (const [index, { doc, items }] of entries.entries()) {
     onProgress?.({ current: index * 2, total, detail: `正在處理第 ${index + 1} / ${entries.length} 個檔案：${doc.fileName}` });
-    const { edits, mapping } = applyRedactions(doc.text, items);
+    const outputItems = redactionItemsForOutput(doc, items);
+    const { edits, mapping } = applyRedactions(doc.text, outputItems);
     const output = unique(outputFileName(doc.fileName, 'deid'));
     const mappingName = unique(mappingFileName(doc.fileName));
     zip.file(output, await generateDocument(doc, edits));

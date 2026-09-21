@@ -13,6 +13,7 @@ import type { RedactionItem } from '../../src/core/types';
 import { parseDocx, generateDocx } from '../../src/formats/docx';
 import { parsePdf, generatePdf } from '../../src/formats/pdf';
 import { parseXlsx, generateXlsx } from '../../src/formats/xlsx';
+import { redactionItemsForOutput } from '../../src/formats';
 import { contract, quotation, customers, supportEmail, meetingNotes } from '../../scripts/lib/documents.ts';
 import { renderDocx } from '../../scripts/lib/render-docx.ts';
 import { renderPdf } from '../../scripts/lib/render-pdf.ts';
@@ -292,7 +293,8 @@ describe('realistic customers workbook (xlsx)', () => {
       expect(originalDoc.text).toContain(String(v));
     }
 
-    const { edits, mapping } = applyRedactions(originalDoc.text, items);
+    const outputItems = redactionItemsForOutput(originalDoc, items);
+    const { edits, mapping } = applyRedactions(originalDoc.text, outputItems);
     const blob = await generateXlsx(originalDoc, edits);
     const outBytes = new Uint8Array(await blob.arrayBuffer());
     const newDoc = await parseXlsx(toXlsxFile(outBytes, 'customers-redacted.xlsx'));
@@ -302,7 +304,7 @@ describe('realistic customers workbook (xlsx)', () => {
       expect(unmarkedText.includes(item.original)).toBe(false);
     }
     const markers = parseMarkers(newDoc.text);
-    expect(markers.length).toBe(items.filter((i) => i.active).length);
+    expect(markers.length).toBe(outputItems.filter((i) => i.active).length);
 
     const newZip = await JSZip.loadAsync(outBytes);
     const sst = await newZip.file('xl/sharedStrings.xml')!.async('string');
@@ -313,7 +315,10 @@ describe('realistic customers workbook (xlsx)', () => {
 
     const restored = restore(newDoc.text, mapping);
     expect(restored.missingCodes).toEqual([]);
-    expect(restored.restoredText).toBe(originalDoc.text);
+    expect(restored.restoredText).not.toBe(originalDoc.text);
+    for (const item of outputItems.filter((i) => i.active)) {
+      expect(restored.restoredText).toContain(item.original);
+    }
   });
 });
 
