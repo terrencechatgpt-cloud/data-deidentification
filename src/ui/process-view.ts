@@ -108,8 +108,12 @@ function fileFormat(file: File): string {
 
 /** A deliberately conservative estimate; the measured rate replaces it after the first progress update. */
 function estimateFileMs(file: File): number {
-  const base = fileFormat(file) === 'pdf' ? 4200 : fileFormat(file) === 'xlsx' ? 1800 : fileFormat(file) === 'docx' ? 850 : 350;
-  const sizeMs = Math.min(12000, (file.size / (1024 * 1024)) * (fileFormat(file) === 'xlsx' ? 900 : 650));
+  const format = fileFormat(file);
+  const base = format === 'pdf' ? 4200 : format === 'xlsx' ? 2500 : format === 'docx' ? 850 : 350;
+  // XLSX is a ZIP container: a few MB on disk can expand into tens of MB of worksheet XML,
+  // formulas, and shared strings. The old 12-second cap made large workbooks look stuck while
+  // the measured ETA caught up.
+  const sizeMs = Math.min(format === 'xlsx' ? 180000 : 12000, (file.size / (1024 * 1024)) * (format === 'xlsx' ? 5000 : 650));
   return base + sizeMs;
 }
 

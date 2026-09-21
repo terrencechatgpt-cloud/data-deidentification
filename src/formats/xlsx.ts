@@ -14,10 +14,8 @@ interface CellRef {
 
 interface SheetInfo {
   path: string;
-  /** The original worksheet XML, retained so generation can rewrite only changed cells. */
-  xml: string;
-  /** Every value-bearing string/numeric cell in document order; formulas and blank cells are skipped. */
-  allCells: CellInfo[];
+  /** Numeric cell offsets are enough to rewrite every non-formula number as 999 at download time. */
+  numericCells: { start: number; end: number }[];
   /** Text cells plus labelled financial numeric cells, in document order. */
   detectableCells: CellInfo[];
 }
@@ -35,10 +33,15 @@ interface CellInfo {
   sharedIndex: number | null;
 }
 
+export interface WorksheetScanResult {
+  numericCells: { start: number; end: number }[];
+  detectableCells: CellInfo[];
+}
+
 export interface XlsxHandle {
-  zip: JSZip;
+  /** Original compressed bytes; the JSZip object and worksheet XML are intentionally not retained. */
+  sourceBytes: Uint8Array;
   sheets: SheetInfo[];
-  sharedStrings: string[];
   financialRanges: { start: number; end: number }[];
   /** Pristine xl/sharedStrings.xml, kept so every generation scrubs from the original. */
   sharedStringsXml: string | null;
@@ -362,6 +365,25 @@ function textCells(cells: CellInfo[]): CellInfo[] {
   return cells.filter((c) => !c.formula && (c.string || isFinancialNumericCell(c, labels)));
 }
 
+/** Drops formula/blank/non-financial numeric metadata before a worker result crosses the boundary. */
+export function compactWorksheetCells(cells: CellInfo[]): WorksheetScanResult {
+  return {
+    numericCells: cells.filter((cell) => cell.numeric).map(({ start, end }) => ({ start, end })),
+    detectableCells: textCells(cells).map(({ start, end, type, numeric, text, row, col, sharedIndex }) => ({
+      start,
+      end,
+      type,
+      formula: false,
+      string: !numeric,
+      numeric,
+      text,
+      row,
+      col,
+      sharedIndex,
+    })),
+  };
+}
+
 function yieldToBrowser(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -370,12 +392,12 @@ interface ScannerWorkerMessage {
   requestId: number;
   kind: 'progress' | 'done' | 'error';
   progress?: number;
-  cells?: CellInfo[];
+  cells?: WorksheetScanResult;
   message?: string;
 }
 
 interface WorksheetScanner {
-  scan(xml: string, shared: string[], onProgress?: (progress: number) => void): Promise<CellInfo[]>;
+  scan(xml: string, shared: string[], onProgress?: (progress: number) => void): Promise<WorksheetScanResult>;
   terminate(): void;
 }
 
@@ -390,7 +412,7 @@ function createWorksheetScanner(): WorksheetScanner | null {
   }
   let nextRequestId = 0;
   const pending = new Map<number, {
-    resolve: (cells: CellInfo[]) => void;
+    resolve: (cells: WorksheetScanResult) => void;
     reject: (error: Error) => void;
     onProgress?: (progress: number) => void;
   }>();
@@ -413,7 +435,7 @@ function createWorksheetScanner(): WorksheetScanner | null {
       request.reject(new Error(message.message ?? '無法解析工作表'));
       return;
     }
-    request.resolve(message.cells ?? []);
+    request.resolve(message.cells ?? { numericCells: [], detectableCells: [] });
   };
   worker.onerror = () => {
     const error = new Error('Excel 工作表掃描失敗');
@@ -422,7 +444,7 @@ function createWorksheetScanner(): WorksheetScanner | null {
     worker.terminate();
   };
   return {
-    scan: (xml, shared, onProgress) => new Promise<CellInfo[]>((resolve, reject) => {
+    scan: (xml, shared, onProgress) => new Promise<WorksheetScanResult>((resolve, reject) => {
       const requestId = nextRequestId++;
       pending.set(requestId, { resolve, reject, onProgress });
       worker.postMessage({ requestId, xml, shared });
@@ -432,7 +454,8 @@ function createWorksheetScanner(): WorksheetScanner | null {
 }
 
 export async function parseXlsx(file: File, onProgress?: (progress: ParseProgress) => void): Promise<LoadedDocument> {
-  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const sourceBytes = new Uint8Array(await file.arrayBuffer());
+  const zip = await JSZip.loadAsync(sourceBytes);
   onProgress?.({ stage: 'xlsx-read', sheet: 0, totalSheets: 0, progress: 0.08 });
   const paths = await sheetPaths(zip);
   if (paths.length === 0) throw new Error('不是有效的 Excel (.xlsx) 檔案');
@@ -445,7 +468,9 @@ export async function parseXlsx(file: File, onProgress?: (progress: ParseProgres
   const cells: CellRef[] = [];
   const layoutSheets: { name: string; cells: XlsxCellLayout[] }[] = [];
   const financialRanges: { start: number; end: number }[] = [];
-  let text = '';
+  const textParts: string[] = [];
+  let textLength = 0;
+  let textEndsWithNewline = false;
   const worksheetScanner = createWorksheetScanner();
 
   for (const [sheetIdx, { path, name }] of paths.entries()) {
@@ -462,38 +487,50 @@ export async function parseXlsx(file: File, onProgress?: (progress: ParseProgres
     const xml = await zip.file(path)!.async('string');
     const layoutCells: XlsxCellLayout[] = [];
     let lastRow = '';
-    const scan = worksheetScanner?.scan(xml, shared, (progress) => reportSheetProgress(0.04 + progress * 0.56))
-      ?? scanWorksheetCells(xml, shared, (progress) => reportSheetProgress(0.04 + progress * 0.56));
-    const allCells = await scan;
-    const detectedCells = textCells(allCells);
-    sheets.push({ path, xml, allCells, detectableCells: detectedCells });
-    for (const [cellIdx, cell] of detectedCells.entries()) {
+    const scanned = worksheetScanner?.scan(xml, shared, (progress) => reportSheetProgress(0.04 + progress * 0.56))
+      ?? scanWorksheetCells(xml, shared, (progress) => reportSheetProgress(0.04 + progress * 0.56)).then(compactWorksheetCells);
+    const { numericCells, detectableCells } = await scanned;
+    sheets.push({ path, numericCells, detectableCells });
+    for (const [cellIdx, cell] of detectableCells.entries()) {
       const t = cell.text;
       if (t.length > 0) {
         const row = String(cell.row);
-        if (text.length > 0 && !text.endsWith('\n')) text += row === lastRow ? '\t' : '\n';
+        if (textLength > 0 && !textEndsWithNewline) {
+          const separator = row === lastRow ? '\t' : '\n';
+          textParts.push(separator);
+          textLength += separator.length;
+        }
         lastRow = row;
+        const start = textLength;
+        const end = start + t.length;
         const coords = { row: cell.row, col: cell.col };
-        segments.push({ start: text.length, end: text.length + t.length, text: t });
-        layoutCells.push({ start: text.length, end: text.length + t.length, ...coords });
-        if (cell.numeric) financialRanges.push({ start: text.length, end: text.length + t.length });
+        segments.push({ start, end, text: t });
+        layoutCells.push({ start, end, ...coords });
+        if (cell.numeric) financialRanges.push({ start, end });
         cells.push({ sheetIdx, cellIdx });
-        text += t;
+        textParts.push(t);
+        textLength = end;
+        textEndsWithNewline = t.endsWith('\n');
       }
-      if (cellIdx === detectedCells.length - 1 || (cellIdx + 1) % 500 === 0) {
-        reportSheetProgress(0.6 + (detectedCells.length === 0 ? 0.4 : ((cellIdx + 1) / detectedCells.length) * 0.4));
+      if (cellIdx === detectableCells.length - 1 || (cellIdx + 1) % 500 === 0) {
+        reportSheetProgress(0.6 + (detectableCells.length === 0 ? 0.4 : ((cellIdx + 1) / detectableCells.length) * 0.4));
         await yieldToBrowser();
       }
     }
     layoutSheets.push({ name, cells: layoutCells });
-    if (!text.endsWith('\n')) text += '\n';
-    text += '\n';
+    if (!textEndsWithNewline) {
+      textParts.push('\n');
+      textLength += 1;
+    }
+    textParts.push('\n');
+    textLength += 1;
+    textEndsWithNewline = true;
   }
   worksheetScanner?.terminate();
 
   const sharedStringsXml = sharedTable.xml;
-  const handle: XlsxHandle = { zip, sheets, sharedStrings: shared, financialRanges, sharedStringsXml, segments, cells };
-  return { fileName: file.name, format: 'xlsx', text, handle, layout: { kind: 'xlsx', sheets: layoutSheets } };
+  const handle: XlsxHandle = { sourceBytes, sheets, financialRanges, sharedStringsXml, segments, cells };
+  return { fileName: file.name, format: 'xlsx', text: textParts.join(''), handle, layout: { kind: 'xlsx', sheets: layoutSheets } };
 }
 
 function escapeXmlText(value: string): string {
@@ -551,8 +588,33 @@ function rewriteNumericCellXml(cellXml: string, value: number): string {
   return `${cellXml.slice(0, openEnd + 1)}${value}${cellXml.slice(close)}`;
 }
 
+interface CellReplacement {
+  start: number;
+  end: number;
+  value: string;
+  numeric: boolean;
+}
+
+/** Rebuilds a worksheet once; repeated whole-string slicing becomes quadratic on large sheets. */
+function rewriteWorksheetXml(xml: string, replacements: Iterable<CellReplacement>): string {
+  const ordered = Array.from(replacements).sort((a, b) => a.start - b.start);
+  if (ordered.length === 0) return xml;
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const replacement of ordered) {
+    if (replacement.start < cursor) continue;
+    parts.push(xml.slice(cursor, replacement.start));
+    const cellXml = xml.slice(replacement.start, replacement.end);
+    parts.push(replacement.numeric ? rewriteNumericCellXml(cellXml, 999) : rewriteCellXml(cellXml, replacement.value));
+    cursor = replacement.end;
+  }
+  parts.push(xml.slice(cursor));
+  return parts.join('');
+}
+
 export async function generateXlsx(doc: LoadedDocument, edits: TextEdit[]): Promise<Blob> {
   const handle = doc.handle as XlsxHandle;
+  const outputZip = await JSZip.loadAsync(handle.sourceBytes);
   const changes = distributeEdits(handle.segments, edits);
 
   const perSheet = new Map<number, Map<number, string>>();
@@ -565,9 +627,11 @@ export async function generateXlsx(doc: LoadedDocument, edits: TextEdit[]): Prom
   const referenced = new Set<number>();
   for (const [sheetIdx, sheet] of handle.sheets.entries()) {
     const cellChanges = perSheet.get(sheetIdx);
-    let sheetXml = sheet.xml;
+    const sheetFile = outputZip.file(sheet.path);
+    if (!sheetFile) continue;
+    let sheetXml = await sheetFile.async('string');
     const changedStarts = new Set<number>();
-    const replacements = new Map<number, { start: number; end: number; value: string; numeric: boolean }>();
+    const replacements = new Map<number, CellReplacement>();
     if (cellChanges) {
       for (const [cellIdx, value] of cellChanges) {
         const cell = sheet.detectableCells[cellIdx];
@@ -576,25 +640,18 @@ export async function generateXlsx(doc: LoadedDocument, edits: TextEdit[]): Prom
         replacements.set(cell.start, { start: cell.start, end: cell.end, value, numeric: false });
       }
     }
-    for (const cell of sheet.allCells) {
-      if (!cell.numeric) continue;
+    for (const cell of sheet.numericCells) {
       replacements.set(cell.start, { start: cell.start, end: cell.end, value: '999', numeric: true });
     }
-    for (const replacement of Array.from(replacements.values()).sort((a, b) => b.start - a.start)) {
-      const cellXml = sheetXml.slice(replacement.start, replacement.end);
-      const rewritten = replacement.numeric
-        ? rewriteNumericCellXml(cellXml, 999)
-        : rewriteCellXml(cellXml, replacement.value);
-      sheetXml = `${sheetXml.slice(0, replacement.start)}${rewritten}${sheetXml.slice(replacement.end)}`;
-    }
-    for (const cell of sheet.allCells) {
+    sheetXml = rewriteWorksheetXml(sheetXml, replacements.values());
+    for (const cell of sheet.detectableCells) {
       if (cell.type !== 's' || cell.sharedIndex === null || changedStarts.has(cell.start)) continue;
       referenced.add(cell.sharedIndex);
     }
-    if (sheetXml !== sheet.xml) handle.zip.file(sheet.path, sheetXml);
+    outputZip.file(sheet.path, sheetXml);
   }
   if (handle.sharedStringsXml !== null) {
-    handle.zip.file('xl/sharedStrings.xml', scrubSharedStrings(handle.sharedStringsXml, referenced));
+    outputZip.file('xl/sharedStrings.xml', scrubSharedStrings(handle.sharedStringsXml, referenced));
   }
-  return handle.zip.generateAsync({ type: 'blob', mimeType: XLSX_MIME, compression: 'DEFLATE' });
+  return outputZip.generateAsync({ type: 'blob', mimeType: XLSX_MIME, compression: 'DEFLATE' });
 }

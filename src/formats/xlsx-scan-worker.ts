@@ -1,4 +1,4 @@
-import { scanWorksheetCells } from './xlsx';
+import { compactWorksheetCells, scanWorksheetCells, type WorksheetScanResult } from './xlsx';
 
 interface ScannerRequest {
   requestId: number;
@@ -10,7 +10,7 @@ interface ScannerResponse {
   requestId: number;
   kind: 'progress' | 'done' | 'error';
   progress?: number;
-  cells?: Awaited<ReturnType<typeof scanWorksheetCells>>;
+  cells?: WorksheetScanResult;
   message?: string;
 }
 
@@ -25,7 +25,7 @@ workerScope.onmessage = async (event) => {
     const cells = await scanWorksheetCells(xml, shared, (progress) => {
       workerScope.postMessage({ requestId, kind: 'progress', progress });
     });
-    workerScope.postMessage({ requestId, kind: 'done', cells });
+    workerScope.postMessage({ requestId, kind: 'done', cells: compactWorksheetCells(cells) });
   } catch (error) {
     workerScope.postMessage({
       requestId,
