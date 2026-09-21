@@ -16,6 +16,8 @@ interface SheetInfo {
   path: string;
   /** Numeric cell offsets are enough to rewrite every non-formula number as 999 at download time. */
   numericCells: { start: number; end: number }[];
+  /** Formula cell offsets are kept as an explicit no-touch list during output generation. */
+  formulaCells: { start: number; end: number }[];
   /** Text cells plus labelled financial numeric cells, in document order. */
   detectableCells: CellInfo[];
 }
@@ -35,7 +37,13 @@ interface CellInfo {
 
 export interface WorksheetScanResult {
   numericCells: { start: number; end: number }[];
+  formulaCells: { start: number; end: number }[];
   detectableCells: CellInfo[];
+}
+
+interface WorksheetCellScan {
+  cells: CellInfo[];
+  formulaCells: { start: number; end: number }[];
 }
 
 export interface XlsxHandle {
@@ -295,8 +303,9 @@ export async function scanWorksheetCells(
   xml: string,
   shared: string[],
   onProgress?: (progress: number) => void,
-): Promise<CellInfo[]> {
+): Promise<WorksheetCellScan> {
   const cells: CellInfo[] = [];
+  const formulaCells: { start: number; end: number }[] = [];
   let searchFrom = 0;
   let scannedCells = 0;
   while (searchFrom < xml.length) {
@@ -347,6 +356,7 @@ export async function scanWorksheetCells(
       }
     }
     searchFrom = end;
+    if (formula) formulaCells.push({ start, end });
     if (!formula && (string ? value.present || inline.present : numeric)) {
       cells.push({ start, end, type, formula, string, numeric, text, sharedIndex, ...coords });
     }
@@ -356,7 +366,7 @@ export async function scanWorksheetCells(
     }
   }
   onProgress?.(1);
-  return cells;
+  return { cells, formulaCells };
 }
 
 /** Detectable value cells in document order: text cells and labelled, non-formula numeric cells. */
@@ -366,9 +376,11 @@ function textCells(cells: CellInfo[]): CellInfo[] {
 }
 
 /** Drops formula/blank/non-financial numeric metadata before a worker result crosses the boundary. */
-export function compactWorksheetCells(cells: CellInfo[]): WorksheetScanResult {
+export function compactWorksheetCells(cells: CellInfo[], formulaCells: { start: number; end: number }[]): WorksheetScanResult {
   return {
-    numericCells: cells.filter((cell) => cell.numeric).map(({ start, end }) => ({ start, end })),
+    // Formula cells are intentionally excluded even when Excel stores a cached numeric <v>.
+    numericCells: cells.filter((cell) => cell.numeric && !cell.formula).map(({ start, end }) => ({ start, end })),
+    formulaCells,
     detectableCells: textCells(cells).map(({ start, end, type, numeric, text, row, col, sharedIndex }) => ({
       start,
       end,
@@ -435,7 +447,7 @@ function createWorksheetScanner(): WorksheetScanner | null {
       request.reject(new Error(message.message ?? '無法解析工作表'));
       return;
     }
-    request.resolve(message.cells ?? { numericCells: [], detectableCells: [] });
+    request.resolve(message.cells ?? { numericCells: [], formulaCells: [], detectableCells: [] });
   };
   worker.onerror = () => {
     const error = new Error('Excel 工作表掃描失敗');
@@ -488,9 +500,10 @@ export async function parseXlsx(file: File, onProgress?: (progress: ParseProgres
     const layoutCells: XlsxCellLayout[] = [];
     let lastRow = '';
     const scanned = worksheetScanner?.scan(xml, shared, (progress) => reportSheetProgress(0.04 + progress * 0.56))
-      ?? scanWorksheetCells(xml, shared, (progress) => reportSheetProgress(0.04 + progress * 0.56)).then(compactWorksheetCells);
-    const { numericCells, detectableCells } = await scanned;
-    sheets.push({ path, numericCells, detectableCells });
+      ?? scanWorksheetCells(xml, shared, (progress) => reportSheetProgress(0.04 + progress * 0.56))
+        .then(({ cells: scannedCells, formulaCells }) => compactWorksheetCells(scannedCells, formulaCells));
+    const { numericCells, formulaCells, detectableCells } = await scanned;
+    sheets.push({ path, numericCells, formulaCells, detectableCells });
     for (const [cellIdx, cell] of detectableCells.entries()) {
       const t = cell.text;
       if (t.length > 0) {
@@ -632,6 +645,7 @@ export async function generateXlsx(doc: LoadedDocument, edits: TextEdit[]): Prom
     let sheetXml = await sheetFile.async('string');
     const changedStarts = new Set<number>();
     const replacements = new Map<number, CellReplacement>();
+    const formulaStarts = new Set(sheet.formulaCells.map((cell) => cell.start));
     if (cellChanges) {
       for (const [cellIdx, value] of cellChanges) {
         const cell = sheet.detectableCells[cellIdx];
@@ -641,6 +655,8 @@ export async function generateXlsx(doc: LoadedDocument, edits: TextEdit[]): Prom
       }
     }
     for (const cell of sheet.numericCells) {
+      // Defensive guard: a formula may also have a cached numeric <v>; it must never become 999.
+      if (formulaStarts.has(cell.start)) continue;
       replacements.set(cell.start, { start: cell.start, end: cell.end, value: '999', numeric: true });
     }
     sheetXml = rewriteWorksheetXml(sheetXml, replacements.values());

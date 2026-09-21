@@ -8,7 +8,7 @@ import { detect } from '../../src/core/detector';
 import { BUILTIN_PATTERNS } from '../../src/core/patterns';
 import { applyRedactions } from '../../src/core/redactor';
 import { restore } from '../../src/core/restorer';
-import { generatePdf, parsePdf } from '../../src/formats/pdf';
+import { buildPdfDocument, generatePdf, parsePdf } from '../../src/formats/pdf';
 
 const FONT = new Uint8Array(readFileSync('public/fonts/NotoSansTC-Regular.ttf'));
 
@@ -36,6 +36,40 @@ beforeAll(() => {
 });
 
 describe('PDF round trip', () => {
+  it('preserves an OCR page image and masks only changed regions', async () => {
+    const pageImage = Uint8Array.from(Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    ));
+    const doc = buildPdfDocument(
+      'scan.pdf',
+      '機密文件 王小明',
+      [{
+        width: 200,
+        height: 200,
+        items: [
+          { text: '機密文件', x: 20, y: 160, fontSize: 12, width: 48 },
+          { text: '王小明', x: 80, y: 160, fontSize: 12, width: 36 },
+        ],
+      }],
+      [
+        { start: 0, end: 4, text: '機密文件' },
+        { start: 5, end: 8, text: '王小明' },
+      ],
+      [0, 0],
+      [0, 1],
+      [{ bytes: pageImage, width: 200, height: 200 }],
+    );
+
+    const blob = await generatePdf(doc, [{ start: 5, end: 8, replacement: '[姓名:abcdef]' }]);
+    const out = await parsePdf(new File([blob], 'scan.deid.pdf'));
+
+    expect(out.text).toContain('機密文件');
+    expect(out.text).toContain('[姓名:abcdef]');
+    expect(out.text).not.toContain('王小明');
+    expect(Buffer.from(await blob.arrayBuffer()).toString('latin1')).toContain('/Subtype /Image');
+  });
+
   it('extracts text with positions and rebuilds a text-only PDF without the originals', async () => {
     const doc = await parsePdf(await buildPdf(LINES));
     for (const l of LINES) expect(doc.text.replace(/\s/g, '')).toContain(l.replace(/\s/g, ''));

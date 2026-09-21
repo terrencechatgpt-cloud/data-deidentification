@@ -3,7 +3,7 @@ import type { Block, Word } from 'tesseract.js';
 import { createWorker } from 'tesseract.js';
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { Segment } from './segments';
-import { buildPdfDocument, type PdfPage, type PdfTextItem } from './pdf';
+import { buildPdfDocument, type PdfPage, type PdfPageImage, type PdfTextItem } from './pdf';
 import type { LoadedDocument } from '../core/types';
 import type { ParseProgress } from './index';
 
@@ -22,6 +22,16 @@ function report(
 function pageScale(width: number, height: number): number {
   const pixelsAtScaleOne = Math.max(1, width * height);
   return Math.min(MAX_OCR_SCALE, Math.max(1, Math.sqrt(MAX_RENDER_PIXELS / pixelsAtScaleOne)));
+}
+
+async function canvasPng(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((value) => {
+      if (value) resolve(value);
+      else reject(new Error('無法保存 OCR 原始頁面影像'));
+    }, 'image/png');
+  });
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 interface LastWord {
@@ -126,8 +136,8 @@ function appendFallbackText(
 
 /**
  * OCRs image-only PDF pages in the browser and returns the same text/layout contract as the
- * regular PDF parser. The source image is only used as an in-memory canvas and is never copied
- * into the generated output PDF.
+ * regular PDF parser. The rendered page is retained in memory so generation can preserve the
+ * original scan as a visual background and cover only redacted regions.
  */
 export async function parsePdfWithOcr(
   file: File,
@@ -159,6 +169,7 @@ export async function parsePdfWithOcr(
     }
 
     const pages: PdfPage[] = [];
+    const pageImages: PdfPageImage[] = [];
     const segments: Segment[] = [];
     const itemPage: number[] = [];
     const itemIndex: number[] = [];
@@ -181,6 +192,9 @@ export async function parsePdfWithOcr(
       report(onProgress, { stage: 'ocr-render', page: p, totalPages, progress: 0 });
       await page.render({ canvasContext: context, viewport }).promise;
       report(onProgress, { stage: 'ocr-render', page: p, totalPages, progress: 1 });
+      // Keep the rendered source page so output can cover only redacted regions instead of
+      // reconstructing the entire scan as a new text-only PDF.
+      const pageImage = await canvasPng(canvas);
       const result = await worker.recognize(canvas, {}, { blocks: true });
       const items: PdfTextItem[] = [];
       text = appendBlockWords(result.data.blocks ?? [], scale, height, p - 1, text, items, segments, itemPage, itemIndex);
@@ -188,6 +202,7 @@ export async function parsePdfWithOcr(
         text = appendFallbackText(result.data.text, width, height, p - 1, text, items, segments, itemPage, itemIndex);
       }
       pages.push({ width, height, items });
+      pageImages.push({ bytes: pageImage, width, height });
       if (!text.endsWith('\n')) text += '\n';
       text += '\n';
       canvas.width = 1;
@@ -196,7 +211,7 @@ export async function parsePdfWithOcr(
     }
 
     if (text.trim().length === 0) throw new Error('OCR 未辨識到可處理的文字，請確認掃描清晰度或先使用專業 OCR');
-    return buildPdfDocument(file.name, text, pages, segments, itemPage, itemIndex);
+    return buildPdfDocument(file.name, text, pages, segments, itemPage, itemIndex, pageImages);
   } finally {
     if (worker) await worker.terminate();
     await task.destroy();

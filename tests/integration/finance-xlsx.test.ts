@@ -18,12 +18,12 @@ describe('numeric cells in Excel', () => {
           ['還款金額', 1234567],
           ['一般數量', 1234567],
           ['應付金額', 800.5],
-          ['公式應付金額', { formula: 'B2+C2', value: 1235367.5 }],
+          ['公式應付金額', { formula: 'SUBTOTAL(9,B2:B4)', value: 2469934.5 }],
         ],
       }],
     });
     const original = await parseXlsx(toXlsxFile(bytes, '財務資料.xlsx'));
-    expect(original.text).not.toContain('1235367.5');
+    expect(original.text).not.toContain('2469934.5');
     const items = detectDocument(original, BUILTIN_PATTERNS);
 
     expect(items.filter((item) => item.category === '財務金額').map((item) => item.original)).toEqual(['1234567', '800.5']);
@@ -44,7 +44,7 @@ describe('numeric cells in Excel', () => {
     expect(outputSheet.match(/<v>999<\/v>/g)).toHaveLength(3);
     expect(outputSheet).not.toContain('<v>1234567</v>');
     expect(outputSheet).not.toContain('<v>800.5</v>');
-    expect(outputSheet).toContain('<f>B2+C2</f>');
-    expect(outputSheet).toContain('<v>1235367.5</v>');
+    expect(outputSheet).toContain('<f>SUBTOTAL(9,B2:B4)</f>');
+    expect(outputSheet).toContain('<v>2469934.5</v>');
   });
 });

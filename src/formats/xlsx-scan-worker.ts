@@ -22,10 +22,10 @@ const workerScope = self as unknown as {
 workerScope.onmessage = async (event) => {
   const { requestId, xml, shared } = event.data;
   try {
-    const cells = await scanWorksheetCells(xml, shared, (progress) => {
+    const scanned = await scanWorksheetCells(xml, shared, (progress) => {
       workerScope.postMessage({ requestId, kind: 'progress', progress });
     });
-    workerScope.postMessage({ requestId, kind: 'done', cells: compactWorksheetCells(cells) });
+    workerScope.postMessage({ requestId, kind: 'done', cells: compactWorksheetCells(scanned.cells, scanned.formulaCells) });
   } catch (error) {
     workerScope.postMessage({
       requestId,

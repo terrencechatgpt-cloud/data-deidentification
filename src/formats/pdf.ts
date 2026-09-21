@@ -1,7 +1,7 @@
 import * as pdfjs from 'pdfjs-dist';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { PDFDocument, PDFFont } from 'pdf-lib';
+import { PDFDocument, PDFFont, PDFPage, rgb } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import type { LoadedDocument, PdfItemLayout, TextEdit } from '../core/types';
 import { distributeEdits, type Segment } from './segments';
@@ -25,6 +25,13 @@ export interface PdfPage {
   items: PdfTextItem[];
 }
 
+/** Rasterized source page used by OCR outputs to preserve the original visual layout. */
+export interface PdfPageImage {
+  bytes: Uint8Array;
+  width: number;
+  height: number;
+}
+
 export interface PdfHandle {
   pages: PdfPage[];
   /** One segment per non-empty text item, in reading order, mapping into the full text. */
@@ -32,6 +39,8 @@ export interface PdfHandle {
   /** segments[i] belongs to pages[itemPage[i]].items[itemIndex[i]] */
   itemPage: number[];
   itemIndex: number[];
+  /** Present only for scanned/OCR PDFs. The source page is kept as the visual background. */
+  pageImages?: PdfPageImage[];
 }
 
 export function buildPdfDocument(
@@ -41,8 +50,9 @@ export function buildPdfDocument(
   segments: Segment[],
   itemPage: number[],
   itemIndex: number[],
+  pageImages?: PdfPageImage[],
 ): LoadedDocument {
-  const handle: PdfHandle = { pages, segments, itemPage, itemIndex };
+  const handle: PdfHandle = { pages, segments, itemPage, itemIndex, pageImages };
   const layoutPages = pages.map((pg) => ({ width: pg.width, height: pg.height, items: [] as PdfItemLayout[] }));
   segments.forEach((segment, i) => {
     const item = pages[itemPage[i]].items[itemIndex[i]];
@@ -150,9 +160,21 @@ function fitSize(font: PDFFont, text: string, size: number, maxWidth: number): n
   return Math.max(4, (size * maxWidth) / w);
 }
 
+function drawRedactionPatch(page: PDFPage, item: PdfTextItem): void {
+  const padX = Math.max(1, item.fontSize * 0.08);
+  const padY = Math.max(1, item.fontSize * 0.18);
+  page.drawRectangle({
+    x: Math.max(0, item.x - padX),
+    y: Math.max(0, item.y - item.fontSize * 0.25 - padY),
+    width: Math.max(1, item.width + padX * 2),
+    height: Math.max(1, item.fontSize * 1.15 + padY * 2),
+    color: rgb(1, 1, 1),
+  });
+}
+
 /**
- * Rebuilds the PDF as text-only pages at the original coordinates. Original bytes are never
- * copied, so no redacted text can survive underneath (see research.md R2).
+ * Rebuilds regular text PDFs as text-only pages. OCR PDFs use their rendered source page as a
+ * background instead, so tables, stamps, line spacing and the original visual layout survive.
  */
 export async function generatePdf(doc: LoadedDocument, edits: TextEdit[]): Promise<Blob> {
   const handle = doc.handle as PdfHandle;
@@ -172,19 +194,38 @@ export async function generatePdf(doc: LoadedDocument, edits: TextEdit[]): Promi
   out.registerFontkit(fontkit);
   const font = await out.embedFont(sparseSubsetTtf(new Uint8Array(await loadFontBytes()), allText), { subset: false });
   const supported = new Set(font.getCharacterSet());
+  const pageImages = handle.pageImages;
+  const preserveScannedLayout = pageImages?.length === handle.pages.length;
+  const embeddedPageImages = preserveScannedLayout
+    ? await Promise.all(pageImages!.map((image) => out.embedPng(image.bytes)))
+    : undefined;
 
   handle.pages.forEach((pg, pIdx) => {
     const page = out.addPage([pg.width, pg.height]);
     const pageChanges = newTexts.get(pIdx);
+    const sourceImage = preserveScannedLayout ? pageImages![pIdx] : undefined;
+    const embeddedImage = embeddedPageImages?.[pIdx];
+    if (sourceImage && embeddedImage) {
+      page.drawImage(embeddedImage, {
+        x: 0,
+        y: 0,
+        width: pg.width,
+        height: pg.height,
+      });
+    }
     pg.items.forEach((it, iIdx) => {
       const changed = pageChanges?.has(iIdx) ?? false;
       const text = sanitizeForFont(changed ? pageChanges!.get(iIdx)! : it.text, supported);
+      if (sourceImage && changed) drawRedactionPatch(page, it);
       if (text.length === 0) return;
       // Replacement text may run past the original item; let it use the space up to the right
-      // margin before shrinking, so whole-line items keep their size.
-      const room = Math.max(it.width, pg.width - it.x - 36);
+      // margin before shrinking, so whole-line items keep their size. For an OCR background,
+      // stay inside the original word box to avoid colliding with neighbouring scan content.
+      const room = sourceImage ? it.width : Math.max(it.width, pg.width - it.x - 36);
       const size = changed ? fitSize(font, text, it.fontSize, room) : it.fontSize;
-      page.drawText(text, { x: it.x, y: it.y, size, font });
+      // OCR pages already contain the unchanged text in the background. Add an invisible text
+      // layer for search/copy; changed items are visible replacement markers only.
+      page.drawText(text, { x: it.x, y: it.y, size, font, opacity: sourceImage && !changed ? 0 : 1 });
     });
   });
 

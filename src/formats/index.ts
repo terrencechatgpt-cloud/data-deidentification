@@ -108,7 +108,7 @@ export function mappingFileName(original: string): string {
 
 export function formatLimitations(format: DocFormat): string | null {
   if (format === 'pdf') {
-    return 'PDF 文字層依原座標重建；掃描型 PDF 會先在瀏覽器內以繁中／英文 OCR，再重建文字版面。圖片、圖形、原字型與 OCR 可能誤認的內容不會保留，請逐頁校對並另行確認附件與中繼資料。';
+    return 'PDF 文字層依原座標處理；掃描型 PDF 會保留原始頁面影像，只覆蓋被去識別化的 OCR 區域，並加入不可見文字層以便搜尋。請逐頁校對 OCR 錯字、漏字、遮罩範圍，並另行確認附件與中繼資料。';
   }
   if (format === 'xlsx') {
     return 'Excel 輸出保留儲存格樣式與工作表結構；所有非公式數值儲存格會統一替換為 999。公式儲存格維持原樣，不會被改寫；日期格式可能依原格式顯示 999 的日期序號，公式結果、工作表名稱、註解、隱藏內容與部分中繼資料不在偵測範圍。';
